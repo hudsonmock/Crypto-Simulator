@@ -1,1 +1,571 @@
+#!/usr/bin/env python3
+"""
+Julia ML Bridge for Crypto Trading Simulator
+Person E: Connecting Julia ML with Python GUI
+
+This module provides the interface between Julia ML predictive strategies 
+and the Python GUI trading interface.
+"""
+
+import sys
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Tuple, Optional, Any
+import json
+from datetime import datetime, timedelta
+import logging
+
+# Julia integration
+try:
+    import julia
+    # Initialize Julia with compiled_modules=False to avoid libpython issues
+    julia.install()  # Ensure Julia packages are installed
+    JULIA_AVAILABLE = True
+    print("✓ Julia integration available")
+except ImportError as e:
+    JULIA_AVAILABLE = False
+    print(f"✗ Julia not available: {e}")
+except Exception as e:
+    JULIA_AVAILABLE = False
+    print(f"✗ Julia setup issue: {e}")
+
+# GUI integration
+try:
+    from PySide6.QtCore import QObject, Signal, QThread, QTimer
+    from PySide6.QtWidgets import QApplication
+    GUI_AVAILABLE = True
+    print("✓ PySide6 GUI integration available")
+except ImportError as e:
+    GUI_AVAILABLE = False
+    print(f"✗ PySide6 not available: {e}")
+
+# Yahoo Finance data compatibility
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+    print("✓ Yahoo Finance integration available")
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("ℹ️  Yahoo Finance not installed (Person D will handle data)")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class JuliaMLEngine:
+    """
+    Julia ML Engine for predictive trading strategies
+    """
+    
+    def __init__(self):
+        self.julia_session = None
+        self.initialized = False
+        self.models_loaded = False
+        
+    def initialize_julia(self):
+        """Initialize Julia session and load ML packages"""
+        if not JULIA_AVAILABLE:
+            raise RuntimeError("Julia not available")
+        
+        try:
+            logger.info("Initializing Julia ML engine...")
+            self.julia_session = julia.Julia(compiled_modules=False)
+            
+            # Import Main after Julia is initialized
+            from julia import Main
+            self.Main = Main
+            
+            # Load required Julia packages
+            self.Main.eval("""
+            using Statistics, DataFrames, CSV
+            using MLJ, BetaML, StatsBase
+            using JSON
+            
+            println("✓ Julia ML packages loaded")
+            """)
+            
+            # Load ML models and functions
+            self._load_ml_functions()
+            
+            self.initialized = True
+            logger.info("✓ Julia ML engine initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Julia: {e}")
+            raise
+    
+    def _load_ml_functions(self):
+        """Load Julia ML functions for crypto prediction"""
+        self.Main.eval("""
+        # Simple moving average prediction
+        function simple_moving_average(prices, window=10)
+            if length(prices) < window
+                return mean(prices)
+            end
+            return mean(prices[end-window+1:end])
+        end
+        
+        # Price trend prediction
+        function predict_trend(prices, periods=5)
+            if length(prices) < 2
+                return 0.0
+            end
+            
+            # Simple linear trend
+            n = length(prices)
+            x = 1:n
+            y = prices
+            
+            # Calculate trend slope
+            slope = sum((x .- mean(x)) .* (y .- mean(y))) / sum((x .- mean(x)).^2)
+            
+            # Predict next values
+            predictions = []
+            for i in 1:periods
+                next_val = prices[end] + slope * i
+                push!(predictions, next_val)
+            end
+            
+            return predictions
+        end
+        
+        # Risk assessment
+        function calculate_risk_score(prices, returns)
+            if length(returns) == 0
+                return 0.5  # neutral risk
+            end
+            
+            volatility = std(returns)
+            mean_return = mean(returns)
+            
+            # Simple risk score (0 = low risk, 1 = high risk)
+            risk_score = min(1.0, volatility / (abs(mean_return) + 0.01))
+            return risk_score
+        end
+        
+        # Trading signal generation
+        function generate_trading_signal(prices, volume=nothing)
+            if length(prices) < 20
+                return "HOLD"
+            end
+            
+            # Simple strategy based on moving averages
+            short_ma = mean(prices[end-4:end])
+            long_ma = mean(prices[end-19:end])
+            
+            if short_ma > long_ma * 1.02
+                return "BUY"
+            elseif short_ma < long_ma * 0.98
+                return "SELL"
+            else
+                return "HOLD"
+            end
+        end
+        
+        println("✓ Julia ML trading functions loaded")
+        """)
+        
+        self.models_loaded = True
+    
+    def predict_price(self, price_data: List[float], periods: int = 5) -> List[float]:
+        """Predict future prices using Julia ML"""
+        if not self.initialized:
+            self.initialize_julia()
+        
+        try:
+            # Convert to Julia array
+            self.Main.prices = price_data
+            self.Main.periods = periods
+            
+            # Get predictions
+            predictions = self.Main.eval("predict_trend(prices, periods)")
+            
+            # Convert back to Python list
+            return [float(p) for p in predictions]
+            
+        except Exception as e:
+            logger.error(f"Price prediction failed: {e}")
+            return [price_data[-1]] * periods  # Fallback to last price
+    
+    def calculate_risk(self, price_data: List[float]) -> float:
+        """Calculate risk score using Julia"""
+        if not self.initialized:
+            self.initialize_julia()
+        
+        try:
+            # Calculate returns
+            returns = np.diff(price_data) / np.array(price_data[:-1])
+            
+            self.Main.prices = price_data
+            self.Main.returns = returns.tolist()
+            
+            risk_score = self.Main.eval("calculate_risk_score(prices, returns)")
+            return float(risk_score)
+            
+        except Exception as e:
+            logger.error(f"Risk calculation failed: {e}")
+            return 0.5  # Neutral risk
+    
+    def generate_signal(self, price_data: List[float], volume_data: Optional[List[float]] = None) -> str:
+        """Generate trading signal using Julia ML"""
+        if not self.initialized:
+            self.initialize_julia()
+        
+        try:
+            self.Main.prices = price_data
+            if volume_data:
+                self.Main.volume = volume_data
+                signal = self.Main.eval("generate_trading_signal(prices, volume)")
+            else:
+                signal = self.Main.eval("generate_trading_signal(prices)")
+            
+            return str(signal)
+            
+        except Exception as e:
+            logger.error(f"Signal generation failed: {e}")
+            return "HOLD"  # Safe fallback
+
+class MLBridgeWorker(QThread):
+    """
+    Worker thread for running Julia ML computations without blocking GUI
+    """
+    
+    # Signals for communicating with GUI
+    prediction_ready = Signal(list)  # price predictions
+    risk_calculated = Signal(float)  # risk score
+    signal_generated = Signal(str)   # trading signal
+    error_occurred = Signal(str)     # error message
+    
+    def __init__(self):
+        super().__init__()
+        self.ml_engine = JuliaMLEngine()
+        self.task_queue = []
+        
+    def add_prediction_task(self, price_data: List[float], periods: int = 5):
+        """Add price prediction task to queue"""
+        self.task_queue.append({
+            'type': 'prediction',
+            'data': price_data,
+            'periods': periods
+        })
+        
+    def add_risk_task(self, price_data: List[float]):
+        """Add risk calculation task to queue"""
+        self.task_queue.append({
+            'type': 'risk',
+            'data': price_data
+        })
+        
+    def add_signal_task(self, price_data: List[float], volume_data: Optional[List[float]] = None):
+        """Add signal generation task to queue"""
+        self.task_queue.append({
+            'type': 'signal',
+            'price_data': price_data,
+            'volume_data': volume_data
+        })
+    
+    def run(self):
+        """Process tasks in the queue"""
+        try:
+            if not self.ml_engine.initialized:
+                self.ml_engine.initialize_julia()
+            
+            while self.task_queue:
+                task = self.task_queue.pop(0)
+                
+                if task['type'] == 'prediction':
+                    predictions = self.ml_engine.predict_price(
+                        task['data'], 
+                        task.get('periods', 5)
+                    )
+                    self.prediction_ready.emit(predictions)
+                    
+                elif task['type'] == 'risk':
+                    risk_score = self.ml_engine.calculate_risk(task['data'])
+                    self.risk_calculated.emit(risk_score)
+                    
+                elif task['type'] == 'signal':
+                    signal = self.ml_engine.generate_signal(
+                        task['price_data'],
+                        task.get('volume_data')
+                    )
+                    self.signal_generated.emit(signal)
+                    
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+class JuliaPythonBridge:
+    """
+    Main bridge class connecting Julia ML with Python GUI
+    """
+    
+    def __init__(self):
+        self.ml_worker = None
+        self.callbacks = {}
+        
+    def initialize(self):
+        """Initialize the bridge"""
+        if GUI_AVAILABLE:
+            self.ml_worker = MLBridgeWorker()
+            self._connect_signals()
+        else:
+            # Fallback to direct ML engine
+            self.ml_engine = JuliaMLEngine()
+            self.ml_engine.initialize_julia()
+    
+    def _connect_signals(self):
+        """Connect worker signals to callback functions"""
+        if self.ml_worker:
+            self.ml_worker.prediction_ready.connect(self._on_prediction_ready)
+            self.ml_worker.risk_calculated.connect(self._on_risk_calculated)
+            self.ml_worker.signal_generated.connect(self._on_signal_generated)
+            self.ml_worker.error_occurred.connect(self._on_error)
+    
+    def set_callback(self, event_type: str, callback_func):
+        """Set callback function for events"""
+        self.callbacks[event_type] = callback_func
+    
+    def _on_prediction_ready(self, predictions):
+        if 'prediction' in self.callbacks:
+            self.callbacks['prediction'](predictions)
+    
+    def _on_risk_calculated(self, risk_score):
+        if 'risk' in self.callbacks:
+            self.callbacks['risk'](risk_score)
+    
+    def _on_signal_generated(self, signal):
+        if 'signal' in self.callbacks:
+            self.callbacks['signal'](signal)
+    
+    def _on_error(self, error_msg):
+        if 'error' in self.callbacks:
+            self.callbacks['error'](error_msg)
+        else:
+            logger.error(f"ML Bridge Error: {error_msg}")
+    
+    def request_prediction(self, price_data: List[float], periods: int = 5):
+        """Request price prediction from Julia ML"""
+        if self.ml_worker:
+            self.ml_worker.add_prediction_task(price_data, periods)
+            if not self.ml_worker.isRunning():
+                self.ml_worker.start()
+        else:
+            # Direct computation
+            predictions = self.ml_engine.predict_price(price_data, periods)
+            if 'prediction' in self.callbacks:
+                self.callbacks['prediction'](predictions)
+    
+    def request_risk_analysis(self, price_data: List[float]):
+        """Request risk analysis from Julia ML"""
+        if self.ml_worker:
+            self.ml_worker.add_risk_task(price_data)
+            if not self.ml_worker.isRunning():
+                self.ml_worker.start()
+        else:
+            # Direct computation
+            risk_score = self.ml_engine.calculate_risk(price_data)
+            if 'risk' in self.callbacks:
+                self.callbacks['risk'](risk_score)
+    
+    def request_trading_signal(self, price_data: List[float], volume_data: Optional[List[float]] = None):
+        """Request trading signal from Julia ML"""
+        if self.ml_worker:
+            self.ml_worker.add_signal_task(price_data, volume_data)
+            if not self.ml_worker.isRunning():
+                self.ml_worker.start()
+        else:
+            # Direct computation
+            signal = self.ml_engine.generate_signal(price_data, volume_data)
+            if 'signal' in self.callbacks:
+                self.callbacks['signal'](signal)
+    
+    def request_prediction_from_yahoo_data(self, yahoo_data, periods: int = 5):
+        """
+        Request price prediction from Yahoo Finance data (Person D's format)
+        
+        Args:
+            yahoo_data: Yahoo Finance data in any format (DataFrame, dict, list)
+            periods: Number of periods to predict
+        """
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
+        if not price_data:
+            logger.error("Could not extract price data from Yahoo Finance format")
+            if 'error' in self.callbacks:
+                self.callbacks['error']("Invalid Yahoo Finance data format")
+            return
+        
+        self.request_prediction(price_data, periods)
+    
+    def request_risk_from_yahoo_data(self, yahoo_data):
+        """Request risk analysis from Yahoo Finance data"""
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
+        if not price_data:
+            logger.error("Could not extract price data for risk analysis")
+            if 'error' in self.callbacks:
+                self.callbacks['error']("Invalid Yahoo Finance data format")
+            return
+        
+        self.request_risk_analysis(price_data)
+    
+    def request_signal_from_yahoo_data(self, yahoo_data):
+        """Request trading signal from Yahoo Finance data"""
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
+        volume_data = YahooFinanceDataAdapter.extract_volume_from_yahoo_data(yahoo_data)
+        
+        if not price_data:
+            logger.error("Could not extract price data for trading signal")
+            if 'error' in self.callbacks:
+                self.callbacks['error']("Invalid Yahoo Finance data format")
+            return
+        
+        self.request_trading_signal(price_data, volume_data)
+    
+    def process_crypto_update(self, symbol: str, yahoo_data, analysis_types: List[str] = None):
+        """
+        Process a crypto update from Person D's Yahoo Finance feed
+        
+        Args:
+            symbol: Crypto symbol (e.g., 'BTC-USD', 'ETH-USD')
+            yahoo_data: Yahoo Finance data
+            analysis_types: List of analyses to run ['prediction', 'risk', 'signal']
+        """
+        if analysis_types is None:
+            analysis_types = ['prediction', 'risk', 'signal']
+        
+        logger.info(f"Processing {symbol} update with analyses: {analysis_types}")
+        
+        # Store current symbol for callbacks
+        self.current_symbol = YahooFinanceDataAdapter.get_crypto_symbol_for_julia(symbol)
+        
+        # Run requested analyses
+        if 'prediction' in analysis_types:
+            self.request_prediction_from_yahoo_data(yahoo_data)
+        
+        if 'risk' in analysis_types:
+            self.request_risk_from_yahoo_data(yahoo_data)
+        
+        if 'signal' in analysis_types:
+            self.request_signal_from_yahoo_data(yahoo_data)
+
+# Test functions
+def test_bridge():
+    """Test the Julia-Python bridge"""
+    print("🚀 Testing Julia-Python ML Bridge...")
+    
+    # Sample price data
+    sample_prices = [100, 102, 101, 105, 108, 106, 110, 112, 108, 115]
+    
+    try:
+        bridge = JuliaPythonBridge()
+        bridge.initialize()
+        
+        # Set up callbacks
+        def on_prediction(predictions):
+            print(f"✓ Predictions received: {predictions}")
+        
+        def on_risk(risk_score):
+            print(f"✓ Risk score: {risk_score:.3f}")
+        
+        def on_signal(signal):
+            print(f"✓ Trading signal: {signal}")
+        
+        def on_error(error):
+            print(f"✗ Error: {error}")
+        
+        bridge.set_callback('prediction', on_prediction)
+        bridge.set_callback('risk', on_risk)
+        bridge.set_callback('signal', on_signal)
+        bridge.set_callback('error', on_error)
+        
+        # Test requests
+        bridge.request_prediction(sample_prices, 3)
+        bridge.request_risk_analysis(sample_prices)
+        bridge.request_trading_signal(sample_prices)
+        
+        print("✓ Bridge test completed!")
+        
+    except Exception as e:
+        print(f"✗ Bridge test failed: {e}")
+
+# Yahoo Finance data adapter
+class YahooFinanceDataAdapter:
+    """
+    Adapter for Yahoo Finance crypto data format
+    Works with Person D's data feed
+    """
+    
+    @staticmethod
+    def extract_prices_from_yahoo_data(yahoo_data):
+        """
+        Convert Yahoo Finance data to price list for Julia ML
+        
+        Args:
+            yahoo_data: Can be pandas DataFrame, dict, or list
+        Returns:
+            List[float]: Price data ready for Julia ML
+        """
+        try:
+            # Handle pandas DataFrame (most common from yfinance)
+            if hasattr(yahoo_data, 'Close'):
+                return yahoo_data['Close'].tolist()
+            elif hasattr(yahoo_data, 'close'):
+                return yahoo_data['close'].tolist()
+            
+            # Handle dictionary format
+            if isinstance(yahoo_data, dict):
+                if 'Close' in yahoo_data:
+                    return list(yahoo_data['Close'].values()) if hasattr(yahoo_data['Close'], 'values') else yahoo_data['Close']
+                elif 'close' in yahoo_data:
+                    return list(yahoo_data['close'].values()) if hasattr(yahoo_data['close'], 'values') else yahoo_data['close']
+                elif 'price' in yahoo_data:
+                    return yahoo_data['price'] if isinstance(yahoo_data['price'], list) else [yahoo_data['price']]
+            
+            # Handle list format (already processed)
+            if isinstance(yahoo_data, list):
+                return [float(x) for x in yahoo_data]
+            
+            # Handle single value
+            if isinstance(yahoo_data, (int, float)):
+                return [float(yahoo_data)]
+                
+            # Fallback - try to extract any numeric data
+            if hasattr(yahoo_data, 'values'):
+                flat_values = yahoo_data.values.flatten() if hasattr(yahoo_data.values, 'flatten') else yahoo_data.values
+                return [float(x) for x in flat_values if not pd.isna(x)]
+                
+        except Exception as e:
+            logger.warning(f"Could not extract prices from Yahoo data: {e}")
+            
+        # Ultimate fallback
+        return []
+    
+    @staticmethod
+    def extract_volume_from_yahoo_data(yahoo_data):
+        """Extract volume data from Yahoo Finance format"""
+        try:
+            if hasattr(yahoo_data, 'Volume'):
+                return yahoo_data['Volume'].tolist()
+            elif hasattr(yahoo_data, 'volume'):
+                return yahoo_data['volume'].tolist()
+            elif isinstance(yahoo_data, dict) and 'Volume' in yahoo_data:
+                return list(yahoo_data['Volume'].values()) if hasattr(yahoo_data['Volume'], 'values') else yahoo_data['Volume']
+        except Exception as e:
+            logger.warning(f"Could not extract volume from Yahoo data: {e}")
+        
+        return None
+    
+    @staticmethod
+    def get_crypto_symbol_for_julia(symbol: str) -> str:
+        """
+        Convert crypto symbols to Julia-friendly format
+        BTC-USD -> BTC, ETH-USD -> ETH, etc.
+        """
+        if '-USD' in symbol:
+            return symbol.replace('-USD', '')
+        elif '-USDT' in symbol:
+            return symbol.replace('-USDT', '')
+        return symbol
+
+if __name__ == "__main__":
+    test_bridge()
 
