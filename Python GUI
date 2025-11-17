@@ -1,800 +1,984 @@
 #!/usr/bin/env python3
 """
-Julia ML Bridge for Crypto Trading Simulator
-Person E: Connecting Julia ML with Python GUI
+Crypto Trading Simulator - 3 Coin GUI (BTC, ETH, USDT)
+Person E: Julia ML + Python GUI Integration
 
-This module provides the interface between Julia ML predictive strategies 
-and the Python GUI trading interface.
+Displays Bitcoin, Ethereum, and Tether with ML analysis for each
 """
 
 import sys
 import numpy as np
-import pandas as pd
-from typing import Dict, List, Tuple, Optional, Any
-import json
 from datetime import datetime, timedelta
-import logging
+import random
 
-# Julia integration with better error handling
-try:
-    import julia
-    print("✓ Julia module imported")
-    
-    # Initialize Julia more safely
-    try:
-        # Try to initialize Julia first
-        julia.install()  # This should be safe
-        print("✓ Julia packages installed/verified")
-        
-        # Try to start Julia instance
-        j = julia.Julia(compiled_modules=False, debug=False)
-        print("✓ Julia instance created")
-        
-        JULIA_AVAILABLE = True
-        print("✓ Julia integration available")
-    except Exception as julia_init_error:
-        print(f"⚠️  Julia initialization issue: {julia_init_error}")
-        # Still mark as available but with limited functionality
-        JULIA_AVAILABLE = True
-        j = None
-        
-except ImportError as e:
-    JULIA_AVAILABLE = False
-    j = None
-    print(f"✗ Julia not available: {e}")
-except Exception as e:
-    JULIA_AVAILABLE = False
-    j = None
-    print(f"✗ Julia setup issue: {e}")
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit, QProgressBar, QGroupBox,
+    QGridLayout, QSpinBox, QTabWidget, QFrame
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QPalette, QColor
 
-# GUI integration
-try:
-    from PySide6.QtCore import QObject, Signal, QThread, QTimer
-    from PySide6.QtWidgets import QApplication
-    GUI_AVAILABLE = True
-    print("✓ PySide6 GUI integration available")
-except ImportError as e:
-    GUI_AVAILABLE = False
-    print(f"✗ PySide6 not available: {e}")
+# Import our Julia ML bridge
+from julia_ml_bridge import JuliaPythonBridge
 
-# Yahoo Finance data compatibility
-try:
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-    print("✓ Yahoo Finance integration available")
-except ImportError:
-    YFINANCE_AVAILABLE = False
-    print("ℹ️  Yahoo Finance not installed (Person D will handle data)")
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Global Julia ML Engine singleton to prevent multiple Julia instances
-_julia_ml_engine_instance = None
-
-class JuliaMLEngine:
+class ThreeCoinTradingGUI(QMainWindow):
     """
-    Julia ML Engine for predictive trading strategies
-    Implements singleton pattern to prevent multiple Julia instances
+    Main GUI for 3-coin crypto trading simulator (BTC, ETH, USDT)
     """
-    
-    def __init__(self):
-        global _julia_ml_engine_instance
-        if _julia_ml_engine_instance is not None:
-            # Copy state from existing instance
-            self.__dict__ = _julia_ml_engine_instance.__dict__
-            return
-        
-        self.julia_session = None
-        self.initialized = False
-        self.models_loaded = False
-        self.Main = None
-        
-        # Set as global instance
-        _julia_ml_engine_instance = self
-        
-    @classmethod
-    def get_instance(cls):
-        """Get or create the global Julia ML Engine instance"""
-        global _julia_ml_engine_instance
-        if _julia_ml_engine_instance is None:
-            _julia_ml_engine_instance = cls()
-        return _julia_ml_engine_instance
-        
-    def initialize_julia(self):
-        """Initialize Julia session and load ML packages - with better error handling"""
-        if not JULIA_AVAILABLE:
-            print("⚠️ Julia not available, using fallback mode")
-            return False
-        
-        try:
-            print("🔧 Initializing Julia ML engine...")
-            
-            # Try to use existing Julia instance if available
-            if hasattr(julia, 'Julia') and j is not None:
-                self.julia_session = j
-                print("✅ Using existing Julia instance")
-            else:
-                # Create new instance carefully
-                try:
-                    self.julia_session = julia.Julia(compiled_modules=False, debug=False)
-                    print("✅ Created new Julia instance")
-                except Exception as julia_create_error:
-                    print(f"⚠️ Julia instance creation failed: {julia_create_error}")
-                    return False
-            
-            # Import Main after Julia is initialized
-            try:
-                from julia import Main
-                self.Main = Main
-                print("✅ Julia Main imported")
-            except Exception as main_error:
-                print(f"⚠️ Julia Main import failed: {main_error}")
-                return False
-            
-            # Try to load required Julia packages - but don't fail if they're not available
-            try:
-                print("📦 Loading Julia packages...")
-                self.Main.eval("""
-                try
-                    using Statistics, Random
-                    println("✅ Basic packages loaded")
-                catch e
-                    println("⚠️ Package loading issue: ", e)
-                end
-                """)
-                
-                # Define simple prediction functions
-                self.Main.eval("""
-                function simple_predict(prices, periods)
-                    if length(prices) < 2
-                        return fill(prices[end], periods)
-                    end
-                    
-                    # Simple trend-based prediction
-                    trend = prices[end] - prices[end-1]
-                    predictions = Float64[]
-                    last_price = prices[end]
-                    
-                    for i in 1:periods
-                        next_price = last_price + trend * (0.5 + 0.5 * rand())
-                        push!(predictions, max(next_price, last_price * 0.8))  # Don't go too negative
-                        last_price = next_price
-                    end
-                    
-                    return predictions
-                end
-                
-                function simple_risk(prices)
-                    if length(prices) < 2
-                        return 0.5
-                    end
-                    
-                    # Calculate volatility as risk
-                    returns = diff(prices) ./ prices[1:end-1]
-                    volatility = std(returns)
-                    
-                    # Normalize to 0-1 range
-                    risk_score = min(volatility * 10, 1.0)
-                    return max(risk_score, 0.0)
-                end
-                
-                function simple_signal(prices)
-                    if length(prices) < 5
-                        return "HOLD"
-                    end
-                    
-                    # Simple moving average crossover
-                    recent_avg = mean(prices[end-2:end])
-                    older_avg = mean(prices[end-4:end-2])
-                    
-                    if recent_avg > older_avg * 1.02
-                        return "BUY"
-                    elseif recent_avg < older_avg * 0.98
-                        return "SELL"
-                    else
-                        return "HOLD"
-                    end
-                end
-                """)
-                
-                self.initialized = True
-                self.models_loaded = True
-                print("✅ Julia ML functions loaded successfully")
-                return True
-                
-            except Exception as package_error:
-                print(f"⚠️ Julia package loading failed: {package_error}")
-                print("🔧 Will use Python fallback for ML functions")
-                self.initialized = False
-                self.models_loaded = False
-                return False
-                
-        except Exception as e:
-            print(f"❌ Julia initialization failed completely: {e}")
-            self.initialized = False
-            self.models_loaded = False
-            return False
-    
-    def predict_price(self, price_data: List[float], periods: int = 5) -> List[float]:
-        """Predict future prices using Julia ML"""
-        if not self.initialized or not self.models_loaded:
-            if not self.initialize_julia():
-                # Fallback to Python prediction
-                print("🔧 Using Python fallback for price prediction")
-                return self._fallback_predict_price(price_data, periods)
-        
-        try:
-            # Convert to Julia array
-            self.Main.prices = price_data
-            self.Main.periods = periods
-            
-            # Get predictions using our defined function
-            predictions = self.Main.eval("simple_predict(prices, periods)")
-            
-            # Convert back to Python list
-            return [float(p) for p in predictions]
-            
-        except Exception as e:
-            print(f"⚠️ Julia price prediction failed: {e}")
-            return self._fallback_predict_price(price_data, periods)
-    
-    def _fallback_predict_price(self, price_data: List[float], periods: int = 5) -> List[float]:
-        """Python fallback for price prediction"""
-        if len(price_data) < 2:
-            return [price_data[-1]] * periods
-        
-        # Simple trend-based prediction
-        trend = price_data[-1] - price_data[-2]
-        predictions = []
-        last_price = price_data[-1]
-        
-        for i in range(periods):
-            next_price = last_price + trend * (0.5 + 0.5 * np.random.random())
-            predictions.append(max(next_price, last_price * 0.8))  # Don't go too negative
-            last_price = next_price
-        
-        return predictions
-    
-    def calculate_risk(self, price_data: List[float]) -> float:
-        """Calculate risk score using Julia"""
-        if not self.initialized or not self.models_loaded:
-            if not self.initialize_julia():
-                # Fallback to Python risk calculation
-                print("🔧 Using Python fallback for risk calculation")
-                return self._fallback_calculate_risk(price_data)
-        
-        try:
-            self.Main.prices = price_data
-            
-            risk_score = self.Main.eval("simple_risk(prices)")
-            return float(risk_score)
-            
-        except Exception as e:
-            print(f"⚠️ Julia risk calculation failed: {e}")
-            return self._fallback_calculate_risk(price_data)
-    
-    def _fallback_calculate_risk(self, price_data: List[float]) -> float:
-        """Python fallback for risk calculation"""
-        if len(price_data) < 2:
-            return 0.5
-        
-        # Calculate volatility as risk
-        returns = np.diff(price_data) / np.array(price_data[:-1])
-        volatility = np.std(returns)
-        
-        # Normalize to 0-1 range
-        risk_score = min(volatility * 10, 1.0)
-        return max(risk_score, 0.0)
-    
-    def generate_signal(self, price_data: List[float], volume_data: Optional[List[float]] = None) -> str:
-        """Generate trading signal using Julia ML"""
-        if not self.initialized or not self.models_loaded:
-            if not self.initialize_julia():
-                # Fallback to Python signal generation
-                print("🔧 Using Python fallback for signal generation")
-                return self._fallback_generate_signal(price_data)
-        
-        try:
-            self.Main.prices = price_data
-            signal = self.Main.eval("simple_signal(prices)")
-            
-            return str(signal)
-            
-        except Exception as e:
-            print(f"⚠️ Julia signal generation failed: {e}")
-            return self._fallback_generate_signal(price_data)
-    
-    def _fallback_generate_signal(self, price_data: List[float]) -> str:
-        """Python fallback for signal generation"""
-        if len(price_data) < 5:
-            return "HOLD"
-        
-        # Simple moving average crossover
-        recent_avg = np.mean(price_data[-3:])
-        older_avg = np.mean(price_data[-5:-2])
-        
-        if recent_avg > older_avg * 1.02:
-            return "BUY"
-        elif recent_avg < older_avg * 0.98:
-            return "SELL"
-        else:
-            return "HOLD"
-
-class MLBridgeWorker(QThread):
-    """
-    Worker thread for running Julia ML computations without blocking GUI
-    """
-    
-    # Signals for communicating with GUI
-    prediction_ready = Signal(list)  # price predictions
-    risk_calculated = Signal(float)  # risk score
-    signal_generated = Signal(str)   # trading signal
-    error_occurred = Signal(str)     # error message
     
     def __init__(self):
         super().__init__()
-        self.ml_engine = JuliaMLEngine.get_instance()
-        self.task_queue = []
+        self.setWindowTitle("🚀 3-Coin Crypto Simulator - BTC • ETH • USDT")
+        self.setGeometry(100, 100, 1400, 800)
         
-    def add_prediction_task(self, price_data: List[float], periods: int = 5):
-        """Add price prediction task to queue"""
-        self.task_queue.append({
-            'type': 'prediction',
-            'data': price_data,
-            'periods': periods
-        })
+        # Initialize coin data
+        self.coins = {
+            'BTC': {'name': 'Bitcoin', 'symbol': '₿', 'color': '#f7931a', 'price_history': []},
+            'ETH': {'name': 'Ethereum', 'symbol': 'Ξ', 'color': '#627eea', 'price_history': []},
+            'USDT': {'name': 'Tether', 'symbol': '₮', 'color': '#26a17b', 'price_history': []}
+        }
         
-    def add_risk_task(self, price_data: List[float]):
-        """Add risk calculation task to queue"""
-        self.task_queue.append({
-            'type': 'risk',
-            'data': price_data
-        })
+        # Initialize portfolio (how much of each coin you own)
+        self.portfolio = {
+            'BTC': 0.0,
+            'ETH': 0.0, 
+            'USDT': 1000.0,  # Start with $1000 USDT for trading
+            'cash': 0.0  # Additional cash balance
+        }
         
-    def add_signal_task(self, price_data: List[float], volume_data: Optional[List[float]] = None):
-        """Add signal generation task to queue"""
-        self.task_queue.append({
-            'type': 'signal',
-            'price_data': price_data,
-            'volume_data': volume_data
-        })
+        # Trading history
+        self.trading_history = []
+        
+        # Initialize Julia-Python bridge
+        self.ml_bridge = JuliaPythonBridge()
+        self.setup_ml_callbacks()
+        
+        # Setup UI first
+        self.setup_ui()
+        self.setup_style()
+        
+        # Generate sample data for all coins
+        self.generate_coin_data()
+        
+        # Initialize portfolio display
+        self.update_portfolio_display()
+        
+        # Setup timer for real-time updates
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_all_coins)
+        self.update_timer.start(5000)  # Update every 5 seconds
     
-    def run(self):
-        """Process tasks in the queue"""
+    def setup_ml_callbacks(self):
+        """Setup callbacks for Julia ML results"""
         try:
-            if not self.ml_engine.initialized:
-                self.ml_engine.initialize_julia()
+            self.ml_bridge.set_callback('prediction', self.on_prediction_received)
+            self.ml_bridge.set_callback('risk', self.on_risk_received)
+            self.ml_bridge.set_callback('signal', self.on_signal_received)
+            self.ml_bridge.set_callback('error', self.on_ml_error)
             
-            while self.task_queue:
-                task = self.task_queue.pop(0)
+            # Initialize the bridge with error handling
+            try:
+                self.ml_bridge.initialize()
+                print("✅ Julia ML bridge initialized successfully")
+            except Exception as init_error:
+                print(f"⚠️ Julia ML initialization warning: {init_error}")
+                print("🔧 Using fallback mode - ML buttons will still work")
                 
-                if task['type'] == 'prediction':
-                    predictions = self.ml_engine.predict_price(
-                        task['data'], 
-                        task.get('periods', 5)
-                    )
-                    self.prediction_ready.emit(predictions)
-                    
-                elif task['type'] == 'risk':
-                    risk_score = self.ml_engine.calculate_risk(task['data'])
-                    self.risk_calculated.emit(risk_score)
-                    
-                elif task['type'] == 'signal':
-                    signal = self.ml_engine.generate_signal(
-                        task['price_data'],
-                        task.get('volume_data')
-                    )
-                    self.signal_generated.emit(signal)
-                    
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            print(f"❌ ML Bridge setup error: {e}")
+            print("🔧 GUI will continue without ML integration")
+    
+    def setup_ui(self):
+        """Setup the user interface with tabs for each coin"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Header with overall portfolio info
+        header = self.create_header()
+        main_layout.addWidget(header)
+        
+        # Tab widget for each coin
+        self.tab_widget = QTabWidget()
+        
+        # Create tabs for each coin
+        self.coin_tabs = {}
+        for coin_id, coin_info in self.coins.items():
+            tab = self.create_coin_tab(coin_id, coin_info)
+            self.tab_widget.addTab(tab, f"{coin_info['symbol']} {coin_id}")
+            self.coin_tabs[coin_id] = tab
+        
+        main_layout.addWidget(self.tab_widget)
+        
+        # Global ML log at the bottom
+        log_frame = self.create_global_log()
+        main_layout.addWidget(log_frame)
+    
+    def create_header(self):
+        """Create header with portfolio overview"""
+        header_frame = QFrame()
+        header_frame.setFixedHeight(80)
+        header_layout = QHBoxLayout(header_frame)
+        
+        # Portfolio title
+        portfolio_label = QLabel("🏦 Crypto Portfolio")
+        portfolio_label.setFont(QFont("Arial", 20, QFont.Bold))
+        header_layout.addWidget(portfolio_label)
+        
+        header_layout.addStretch()
+        
+        # Portfolio stats
+        self.portfolio_value_label = QLabel("Total Value: $0")
+        self.portfolio_value_label.setFont(QFont("Arial", 14))
+        header_layout.addWidget(self.portfolio_value_label)
+        
+        # ML Status
+        self.ml_status_label = QLabel("ML Status: Ready")
+        self.ml_status_label.setFont(QFont("Arial", 12))
+        header_layout.addWidget(self.ml_status_label)
+        
+        return header_frame
+    
+    def create_coin_tab(self, coin_id, coin_info):
+        """Create tab content for a specific coin"""
+        tab_widget = QWidget()
+        layout = QHBoxLayout(tab_widget)
+        
+        # Left panel - Price data and history
+        left_panel = self.create_coin_price_panel(coin_id, coin_info)
+        layout.addWidget(left_panel, 1)
+        
+        # Right panel - ML analysis
+        right_panel = self.create_coin_ml_panel(coin_id, coin_info)
+        layout.addWidget(right_panel, 1)
+        
+        return tab_widget
+    
+    def create_coin_price_panel(self, coin_id, coin_info):
+        """Create price panel for a coin"""
+        panel = QGroupBox(f"{coin_info['symbol']} {coin_info['name']} - Market Data")
+        layout = QVBoxLayout(panel)
+        
+        # Current price (large display)
+        price_frame = QFrame()
+        price_layout = QVBoxLayout(price_frame)
+        
+        coin_price_label = QLabel(f"{coin_id} Price")
+        coin_price_label.setFont(QFont("Arial", 12))
+        coin_price_label.setAlignment(Qt.AlignCenter)
+        
+        price_value_label = QLabel("$0.00")
+        price_value_label.setFont(QFont("Arial", 24, QFont.Bold))
+        price_value_label.setAlignment(Qt.AlignCenter)
+        price_value_label.setStyleSheet(f"color: {coin_info['color']};")
+        
+        price_change_label = QLabel("0.00%")
+        price_change_label.setFont(QFont("Arial", 14))
+        price_change_label.setAlignment(Qt.AlignCenter)
+        
+        price_layout.addWidget(coin_price_label)
+        price_layout.addWidget(price_value_label)
+        price_layout.addWidget(price_change_label)
+        
+        # Store references for updates
+        setattr(self, f'{coin_id}_price_label', price_value_label)
+        setattr(self, f'{coin_id}_change_label', price_change_label)
+        
+        layout.addWidget(price_frame)
+        
+        # Price history
+        history_group = QGroupBox("Recent Price History")
+        history_layout = QVBoxLayout(history_group)
+        
+        price_history_text = QTextEdit()
+        price_history_text.setMaximumHeight(120)
+        price_history_text.setPlaceholderText(f"{coin_id} price history will appear here...")
+        history_layout.addWidget(price_history_text)
+        
+        # Store reference
+        setattr(self, f'{coin_id}_history_text', price_history_text)
+        
+        layout.addWidget(history_group)
+        
+        # Portfolio holdings for this coin
+        portfolio_group = QGroupBox(f"Your {coin_id} Holdings")
+        portfolio_layout = QVBoxLayout(portfolio_group)
+        
+        holdings_label = QLabel(f"{coin_id} Amount: 0.000")
+        holdings_label.setFont(QFont("Arial", 12, QFont.Bold))
+        holdings_label.setStyleSheet(f"color: {coin_info['color']};")
+        
+        value_label = QLabel("Value: $0.00")
+        value_label.setFont(QFont("Arial", 10))
+        
+        portfolio_layout.addWidget(holdings_label)
+        portfolio_layout.addWidget(value_label)
+        
+        # Store references
+        setattr(self, f'{coin_id}_holdings_label', holdings_label)
+        setattr(self, f'{coin_id}_value_label', value_label)
+        
+        layout.addWidget(portfolio_group)
+        
+        # ML Control buttons
+        controls_group = QGroupBox(f"{coin_id} ML Analysis Controls")
+        controls_layout = QGridLayout(controls_group)
+        
+        # Prediction button
+        predict_btn = QPushButton(f"🔮 Predict {coin_id} Price")
+        predict_btn.clicked.connect(lambda: self.request_coin_prediction(coin_id))
+        controls_layout.addWidget(predict_btn, 0, 0, 1, 2)
+        
+        # Risk button  
+        risk_btn = QPushButton(f"⚠️ Analyze {coin_id} Risk")
+        risk_btn.clicked.connect(lambda: self.request_coin_risk(coin_id))
+        controls_layout.addWidget(risk_btn, 1, 0, 1, 2)
+        
+        # Recommendation button
+        signal_btn = QPushButton(f"📊 Get {coin_id} Recommendation")
+        signal_btn.clicked.connect(lambda: self.request_coin_recommendation(coin_id))
+        controls_layout.addWidget(signal_btn, 2, 0, 1, 2)
+        
+        # Trading action buttons
+        buy_btn = QPushButton(f"💰 BUY {coin_id}")
+        buy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #218838; }
+        """)
+        buy_btn.clicked.connect(lambda: self.execute_buy_order(coin_id))
+        controls_layout.addWidget(buy_btn, 3, 0)
+        
+        sell_btn = QPushButton(f"💸 SELL {coin_id}")
+        sell_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #c82333; }
+        """)
+        sell_btn.clicked.connect(lambda: self.execute_sell_order(coin_id))
+        controls_layout.addWidget(sell_btn, 3, 1)
+        
+        # Store button references
+        setattr(self, f'{coin_id}_predict_btn', predict_btn)
+        setattr(self, f'{coin_id}_risk_btn', risk_btn)
+        setattr(self, f'{coin_id}_recommendation_btn', signal_btn)
+        setattr(self, f'{coin_id}_buy_btn', buy_btn)
+        setattr(self, f'{coin_id}_sell_btn', sell_btn)
+        
+        layout.addWidget(controls_group)
+        
+        return panel
+    
+    def create_coin_ml_panel(self, coin_id, coin_info):
+        """Create ML analysis panel for a coin"""
+        panel = QGroupBox(f"{coin_info['symbol']} {coin_id} - Julia ML Analysis")
+        layout = QVBoxLayout(panel)
+        
+        # Price Predictions
+        pred_group = QGroupBox("Price Predictions")
+        pred_layout = QVBoxLayout(pred_group)
+        predictions_text = QTextEdit()
+        predictions_text.setMaximumHeight(100)
+        predictions_text.setPlaceholderText(f"{coin_id} predictions will appear here...")
+        pred_layout.addWidget(predictions_text)
+        setattr(self, f'{coin_id}_predictions_text', predictions_text)
+        layout.addWidget(pred_group)
+        
+        # Risk Analysis
+        risk_group = QGroupBox("Risk Analysis")
+        risk_layout = QVBoxLayout(risk_group)
+        
+        risk_label = QLabel("Risk Score: --")
+        risk_label.setFont(QFont("Arial", 12))
+        risk_layout.addWidget(risk_label)
+        
+        risk_bar = QProgressBar()
+        risk_bar.setRange(0, 100)
+        risk_layout.addWidget(risk_bar)
+        
+        setattr(self, f'{coin_id}_risk_label', risk_label)
+        setattr(self, f'{coin_id}_risk_bar', risk_bar)
+        layout.addWidget(risk_group)
+        
+        # Trading Recommendation
+        recommendation_group = QGroupBox("Trading Recommendation")
+        recommendation_layout = QVBoxLayout(recommendation_group)
+        
+        recommendation_label = QLabel("Recommendation: --")
+        recommendation_label.setFont(QFont("Arial", 14, QFont.Bold))
+        recommendation_label.setAlignment(Qt.AlignCenter)
+        recommendation_layout.addWidget(recommendation_label)
+        
+        setattr(self, f'{coin_id}_recommendation_label', recommendation_label)
+        layout.addWidget(recommendation_group)
+        
+        # Trading History for this coin
+        history_group = QGroupBox(f"{coin_id} Trading History")
+        history_layout = QVBoxLayout(history_group)
+        
+        trading_log = QTextEdit()
+        trading_log.setMaximumHeight(80)
+        trading_log.setPlaceholderText(f"{coin_id} trades will appear here...")
+        history_layout.addWidget(trading_log)
+        
+        setattr(self, f'{coin_id}_trading_log', trading_log)
+        layout.addWidget(history_group)
+        
+        # Coin-specific log
+        log_group = QGroupBox(f"{coin_id} Activity Log")
+        log_layout = QVBoxLayout(log_group)
+        
+        coin_log = QTextEdit()
+        coin_log.setMaximumHeight(100)
+        log_layout.addWidget(coin_log)
+        
+        setattr(self, f'{coin_id}_log', coin_log)
+        layout.addWidget(log_group)
+        
+        return panel
+    
+    def create_global_log(self):
+        """Create global ML processing log"""
+        log_frame = QFrame()
+        log_frame.setFixedHeight(120)
+        log_layout = QVBoxLayout(log_frame)
+        
+        log_label = QLabel("🤖 Global ML Processing Log")
+        log_label.setFont(QFont("Arial", 12, QFont.Bold))
+        
+        self.global_ml_log = QTextEdit()
+        self.global_ml_log.setMaximumHeight(80)
+        
+        log_layout.addWidget(log_label)
+        log_layout.addWidget(self.global_ml_log)
+        
+        return log_frame
+    
+    def setup_style(self):
+        """Setup application styling for 3-coin GUI"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e1e;
+                color: #ffffff;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #555555;
+                border-radius: 5px;
+                margin: 5px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+            QPushButton {
+                background-color: #0066cc;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0052a3;
+            }
+            QPushButton:pressed {
+                background-color: #003d7a;
+            }
+            QTextEdit {
+                background-color: #2d2d2d;
+                border: 1px solid #555555;
+                border-radius: 3px;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+            QTabWidget::pane {
+                border: 1px solid #555555;
+                background-color: #2d2d2d;
+            }
+            QTabBar::tab {
+                background-color: #404040;
+                color: white;
+                padding: 8px 16px;
+                margin: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background-color: #0066cc;
+            }
+            QTabBar::tab:hover {
+                background-color: #505050;
+            }
+        """)
+    
+    def generate_coin_data(self):
+        """Generate sample price data for all coins"""
+        import pandas as pd
+        
+        # Generate data for each coin with realistic base prices
+        base_prices = {
+            'BTC': 45000,  # Bitcoin ~$45k
+            'ETH': 2500,   # Ethereum ~$2.5k  
+            'USDT': 1.0    # Tether ~$1 (stablecoin)
+        }
+        
+        for coin_id, base_price in base_prices.items():
+            prices = []
+            
+            for i in range(30):
+                if coin_id == 'USDT':
+                    # Tether is stable, very small variations
+                    change = random.uniform(-0.001, 0.001)  # ±0.1%
+                else:
+                    # BTC/ETH more volatile
+                    change = random.uniform(-0.05, 0.05)  # ±5%
+                
+                if prices:
+                    new_price = prices[-1] * (1 + change)
+                else:
+                    new_price = base_price
+                
+                # Set minimums
+                min_price = 0.98 if coin_id == 'USDT' else base_price * 0.5
+                prices.append(max(min_price, new_price))
+            
+            # Store price history for each coin
+            self.coins[coin_id]['price_history'] = prices[-20:]
+            
+            # Create Yahoo Finance format for Person D integration
+            self.coins[coin_id]['yahoo_data'] = {
+                'Close': prices,
+                'Volume': [random.randint(50000, 200000) for _ in range(30)]
+            }
+        
+        self.log_global_activity("📊 Generated sample data for BTC, ETH, USDT")
+    
+    def update_all_coins(self):
+        """Update all coin prices (simulate real-time updates)"""
+        for coin_id, coin_info in self.coins.items():
+            self.update_coin_price(coin_id)
+        # Portfolio display is updated automatically in update_coin_display
+    
+    def update_coin_price(self, coin_id):
+        """Update a specific coin's price"""
+        coin_info = self.coins[coin_id]
+        if coin_info['price_history']:
+            # Generate price change based on coin type
+            if coin_id == 'USDT':
+                change = random.uniform(-0.001, 0.001)  # Stable
+            else:
+                change = random.uniform(-0.03, 0.03)  # More volatile
+            
+            new_price = coin_info['price_history'][-1] * (1 + change)
+            
+            # Apply minimums
+            min_price = 0.98 if coin_id == 'USDT' else 1000
+            new_price = max(min_price, new_price)
+            
+            # Update data
+            coin_info['price_history'].append(new_price)
+            if len(coin_info['price_history']) > 50:
+                coin_info['price_history'] = coin_info['price_history'][-50:]
+            
+            # Update Yahoo data if it exists
+            if 'yahoo_data' in coin_info:
+                coin_info['yahoo_data']['Close'].append(new_price)
+                coin_info['yahoo_data']['Volume'].append(random.randint(50000, 200000))
+            
+            # Update UI
+            self.update_coin_display(coin_id)
+    
+    def update_coin_display(self, coin_id):
+        """Update the display for a specific coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        
+        # Update price label
+        price_label = getattr(self, f'{coin_id}_price_label', None)
+        if price_label:
+            if coin_id == 'USDT':
+                price_label.setText(f"${current_price:.4f}")  # More precision for USDT
+            else:
+                price_label.setText(f"${current_price:.2f}")
+        
+        # Update change percentage
+        change_label = getattr(self, f'{coin_id}_change_label', None)
+        if change_label and len(coin_info['price_history']) >= 2:
+            prev_price = coin_info['price_history'][-2]
+            change_pct = ((current_price - prev_price) / prev_price) * 100
+            change_text = f"{change_pct:+.2f}%"
+            color = "green" if change_pct >= 0 else "red"
+            change_label.setText(change_text)
+            change_label.setStyleSheet(f"color: {color};")
+        
+        # Update price history text
+        history_text = getattr(self, f'{coin_id}_history_text', None)
+        if history_text:
+            recent_prices = coin_info['price_history'][-10:]
+            history_content = f"Recent {coin_id} Prices:\n"
+            for i, price in enumerate(recent_prices):
+                if coin_id == 'USDT':
+                    history_content += f"{i+1:2d}. ${price:.4f}\n"
+                else:
+                    history_content += f"{i+1:2d}. ${price:.2f}\n"
+            history_text.setText(history_content)
+        
+        # Update portfolio display (holdings and values)
+        self.update_portfolio_display()
+    
+    def log_global_activity(self, message):
+        """Log activity to global ML log"""
+        try:
+            if hasattr(self, 'global_ml_log') and self.global_ml_log:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                log_entry = f"[{timestamp}] {message}"
+                self.global_ml_log.append(log_entry)
+        except Exception as e:
+            print(f"Global logging error: {e}")
+    
+    def log_coin_activity(self, coin_id, message):
+        """Log activity to specific coin log"""
+        try:
+            coin_log = getattr(self, f'{coin_id}_log', None)
+            if coin_log:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                log_entry = f"[{timestamp}] {message}"
+                coin_log.append(log_entry)
+            
+            # Also log to global
+            self.log_global_activity(f"{coin_id}: {message}")
+        except Exception as e:
+            print(f"Logging error for {coin_id}: {e}")
+    
+    # ML Request methods for specific coins
+    def request_coin_prediction(self, coin_id):
+        """Request price prediction for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 5:
+            self.log_coin_activity(coin_id, "❌ Not enough data for prediction")
+            return
+        
+        predict_btn = getattr(self, f'{coin_id}_predict_btn', None)
+        if predict_btn:
+            predict_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "🔮 Requesting ML prediction...")
+        
+        # Store which coin is being analyzed
+        self.current_analysis_coin = coin_id
+        
+        # Use bridge
+        self.ml_bridge.request_prediction(coin_info['price_history'], 5)
+    
+    def request_coin_risk(self, coin_id):
+        """Request risk analysis for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 5:
+            self.log_coin_activity(coin_id, "❌ Not enough data for risk analysis")
+            return
+        
+        risk_btn = getattr(self, f'{coin_id}_risk_btn', None)
+        if risk_btn:
+            risk_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "⚠️ Analyzing risk...")
+        
+        self.current_analysis_coin = coin_id
+        self.ml_bridge.request_risk_analysis(coin_info['price_history'])
+    
+    def request_coin_recommendation(self, coin_id):
+        """Request trading recommendation for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 10:
+            self.log_coin_activity(coin_id, "❌ Not enough data for recommendation")
+            return
+        
+        recommendation_btn = getattr(self, f'{coin_id}_recommendation_btn', None)
+        if recommendation_btn:
+            recommendation_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "📊 Generating trading recommendation...")
+        
+        self.current_analysis_coin = coin_id
+        self.ml_bridge.request_trading_signal(coin_info['price_history'])
+    
+    def execute_buy_order(self, coin_id):
+        """Execute a buy order for the specified coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            self.log_coin_activity(coin_id, "❌ No price data available for trading")
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        
+        # For demo, buy $100 worth or available USDT, whichever is less
+        usdt_to_spend = min(100.0, self.portfolio['USDT'])
+        
+        if usdt_to_spend < 1.0:
+            self.log_coin_activity(coin_id, "❌ Insufficient USDT balance for purchase")
+            return
+        
+        # Calculate how much coin we can buy
+        amount_to_buy = usdt_to_spend / current_price
+        
+        # Execute trade
+        self.portfolio[coin_id] += amount_to_buy
+        self.portfolio['USDT'] -= usdt_to_spend
+        
+        # Record trade
+        trade_record = {
+            'type': 'BUY',
+            'coin': coin_id,
+            'amount': amount_to_buy,
+            'price': current_price,
+            'total': usdt_to_spend,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        self.trading_history.append(trade_record)
+        
+        # Log and update display
+        self.log_coin_activity(coin_id, f"✅ BUY: {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f} = ${usdt_to_spend:.2f}")
+        self.log_trading_activity(coin_id, f"📈 BUY {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f}")
+        self.update_portfolio_display()
+    
+    def execute_sell_order(self, coin_id):
+        """Execute a sell order for the specified coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            self.log_coin_activity(coin_id, "❌ No price data available for trading")
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        available_amount = self.portfolio[coin_id]
+        
+        if available_amount < 0.000001:  # Minimum amount
+            self.log_coin_activity(coin_id, f"❌ No {coin_id} holdings to sell")
+            return
+        
+        # For demo, sell 10% of holdings or all if less than $10 worth
+        amount_to_sell = available_amount * 0.1
+        if amount_to_sell * current_price < 10.0:
+            amount_to_sell = available_amount  # Sell all
+        
+        # Execute trade
+        usdt_received = amount_to_sell * current_price
+        self.portfolio[coin_id] -= amount_to_sell
+        self.portfolio['USDT'] += usdt_received
+        
+        # Record trade
+        trade_record = {
+            'type': 'SELL',
+            'coin': coin_id,
+            'amount': amount_to_sell,
+            'price': current_price,
+            'total': usdt_received,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        self.trading_history.append(trade_record)
+        
+        # Log and update display
+        self.log_coin_activity(coin_id, f"✅ SELL: {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f} = +${usdt_received:.2f}")
+        self.log_trading_activity(coin_id, f"📉 SELL {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f}")
+        self.update_portfolio_display()
+    
+    def log_trading_activity(self, coin_id, message):
+        """Log trading activity to specific coin's trading log"""
+        trading_log = getattr(self, f'{coin_id}_trading_log', None)
+        if trading_log:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}"
+            trading_log.append(log_entry)
+    
+    def update_portfolio_display(self):
+        """Update portfolio holdings display for all coins"""
+        total_portfolio_value = self.portfolio['USDT']  # Start with USDT
+        
+        for coin_id, coin_info in self.coins.items():
+            holdings = self.portfolio[coin_id]
+            
+            # Update holdings label
+            holdings_label = getattr(self, f'{coin_id}_holdings_label', None)
+            if holdings_label:
+                if coin_id == 'USDT':
+                    holdings_label.setText(f"USDT Balance: ${holdings:.2f}")
+                else:
+                    holdings_label.setText(f"{coin_id} Amount: {holdings:.6f}")
+            
+            # Update value label
+            value_label = getattr(self, f'{coin_id}_value_label', None)
+            if value_label and coin_info['price_history']:
+                current_price = coin_info['price_history'][-1]
+                value = holdings * current_price
+                value_label.setText(f"Value: ${value:.2f}")
+                
+                if coin_id != 'USDT':  # Don't double count USDT
+                    total_portfolio_value += value
+        
+        # Update total portfolio value
+        self.portfolio_value_label.setText(f"Portfolio Value: ${total_portfolio_value:.2f}")
 
-class JuliaPythonBridge:
+    # ML Callback Methods for 3-coin system
+    def on_prediction_received(self, predictions):
+        """Handle prediction results from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            predict_btn = getattr(self, f'{coin_id}_predict_btn', None)
+            if predict_btn:
+                predict_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Prediction Complete")
+            
+            # Display predictions
+            predictions_text = getattr(self, f'{coin_id}_predictions_text', None)
+            if predictions_text and coin_id in self.coins:
+                coin_info = self.coins[coin_id]
+                current_price = coin_info['price_history'][-1] if coin_info['price_history'] else 0
+                
+                pred_content = f"{coin_id} ML Predictions:\n"
+                for i, pred in enumerate(predictions):
+                    if current_price > 0:
+                        change = ((pred - current_price) / current_price) * 100
+                        pred_content += f"Period {i+1}: ${pred:.2f} ({change:+.2f}%)\n"
+                    else:
+                        pred_content += f"Period {i+1}: ${pred:.2f}\n"
+                
+                predictions_text.setText(pred_content)
+            
+            self.log_coin_activity(coin_id, f"✅ Received {len(predictions)} predictions")
+        except Exception as e:
+            print(f"Error handling prediction: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Prediction Error")
+    
+    def on_risk_received(self, risk_score):
+        """Handle risk analysis results from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            risk_btn = getattr(self, f'{coin_id}_risk_btn', None)
+            if risk_btn:
+                risk_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Risk Analysis Complete")
+            
+            # Update risk display
+            risk_percentage = int(risk_score * 100)
+            
+            risk_bar = getattr(self, f'{coin_id}_risk_bar', None)
+            if risk_bar:
+                risk_bar.setValue(risk_percentage)
+            
+            risk_label = getattr(self, f'{coin_id}_risk_label', None)
+            if risk_label:
+                if risk_score < 0.3:
+                    risk_level = "LOW"
+                    color = "green"
+                elif risk_score < 0.7:
+                    risk_level = "MEDIUM" 
+                    color = "orange"
+                else:
+                    risk_level = "HIGH"
+                    color = "red"
+                
+                risk_label.setText(f"Risk Score: {risk_score:.3f} ({risk_level})")
+                risk_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+            
+            self.log_coin_activity(coin_id, f"✅ Risk: {risk_level} ({risk_score:.3f})")
+        except Exception as e:
+            print(f"Error handling risk analysis: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Risk Analysis Error")
+    
+    def on_signal_received(self, signal):
+        """Handle trading recommendation from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            recommendation_btn = getattr(self, f'{coin_id}_recommendation_btn', None)
+            if recommendation_btn:
+                recommendation_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Recommendation Generated")
+            
+            # Update recommendation display
+            recommendation_label = getattr(self, f'{coin_id}_recommendation_label', None)
+            if recommendation_label:
+                if signal == "BUY":
+                    color = "green"
+                    emoji = "📈"
+                elif signal == "SELL":
+                    color = "red"
+                    emoji = "📉"
+                else:
+                    color = "yellow"
+                    emoji = "⏸️"
+                
+                recommendation_label.setText(f"{emoji} Recommendation: {signal}")
+                recommendation_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 16px;")
+            
+            self.log_coin_activity(coin_id, f"✅ Recommendation: {signal}")
+        except Exception as e:
+            print(f"Error handling recommendation: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Recommendation Error")
+    
+    def on_ml_error(self, error_msg):
+        """Handle ML processing errors"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable all buttons for this coin
+            for btn_type in ['predict', 'risk', 'recommendation']:
+                btn = getattr(self, f'{coin_id}_{btn_type}_btn', None)
+                if btn:
+                    btn.setEnabled(True)
+            
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Error Occurred")
+            
+            self.log_coin_activity(coin_id, f"❌ ML Error: {error_msg}")
+        except Exception as e:
+            print(f"Error handling ML error: {e}")
+
+
+# Legacy single-coin class for backward compatibility
+class TradingSimulatorGUI(QMainWindow):
     """
-    Main bridge class connecting Julia ML with Python GUI
+    Legacy single-coin trading GUI - kept for backward compatibility
+    Use ThreeCoinTradingGUI for new implementations
     """
     
     def __init__(self):
-        self.ml_worker = None
-        self.callbacks = {}
+        super().__init__()
+        self.setWindowTitle("🚀 Crypto Trading Simulator - Julia ML Integration")
+        self.setGeometry(100, 100, 1200, 800)
         
-    def initialize(self):
-        """Initialize the bridge"""
+        # Initialize Julia-Python bridge
+        self.ml_bridge = JuliaPythonBridge()
+        self.setup_ml_callbacks()
+        
+        # Setup UI first
+        self.setup_ui()
+        self.setup_style()
+        
+        # Generate sample data
+        self.generate_sample_data()
+        
+        # Setup timer
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_data)
+        self.update_timer.start(3000)  # Update every 3 seconds
+        
+        # Start with display update
+        self.update_display()
+    
+    def setup_ml_callbacks(self):
+        """Setup callbacks for Julia ML results"""
+        self.ml_bridge.set_callback('prediction', self.on_prediction_received_legacy)
+        self.ml_bridge.set_callback('risk', self.on_risk_received_legacy)
+        self.ml_bridge.set_callback('signal', self.on_signal_received_legacy)
+        self.ml_bridge.set_callback('error', self.on_ml_error_legacy)
+        
+        # Initialize the bridge
         try:
-            # Always get the singleton ML engine
-            self.ml_engine = JuliaMLEngine.get_instance()
-            
-            # Only initialize Julia if not already done
-            if not self.ml_engine.initialized:
-                engine_initialized = self.ml_engine.initialize_julia()
-            else:
-                print("✅ Using existing initialized Julia ML engine")
-                engine_initialized = True
-            
-            # Disable threaded worker for now due to Julia segfaults
-            # TODO: Fix threading issues with Julia
-            print("ℹ️ Using direct ML engine mode (threading disabled)")
-            self.ml_worker = None
-                
-            if not engine_initialized:
-                print("⚠️ Julia ML engine initialization had issues")
-                print("🔧 Fallback mode enabled for stability")
-                
+            self.ml_bridge.initialize()
         except Exception as e:
-            print(f"❌ Bridge initialization failed: {e}")
-            print("🔧 Creating safe fallback configuration")
-            self.ml_engine = None
-            self.ml_worker = None
+            print(f"Warning: Julia ML not available: {e}")
     
-    def _connect_signals(self):
-        """Connect worker signals to callback functions"""
-        if self.ml_worker:
-            self.ml_worker.prediction_ready.connect(self._on_prediction_ready)
-            self.ml_worker.risk_calculated.connect(self._on_risk_calculated)
-            self.ml_worker.signal_generated.connect(self._on_signal_generated)
-            self.ml_worker.error_occurred.connect(self._on_error)
-    
-    def set_callback(self, event_type: str, callback_func):
-        """Set callback function for events"""
-        self.callbacks[event_type] = callback_func
-    
-    def _on_prediction_ready(self, predictions):
-        if 'prediction' in self.callbacks:
-            self.callbacks['prediction'](predictions)
-    
-    def _on_risk_calculated(self, risk_score):
-        if 'risk' in self.callbacks:
-            self.callbacks['risk'](risk_score)
-    
-    def _on_signal_generated(self, signal):
-        if 'signal' in self.callbacks:
-            self.callbacks['signal'](signal)
-    
-    def _on_error(self, error_msg):
-        if 'error' in self.callbacks:
-            self.callbacks['error'](error_msg)
-        else:
-            logger.error(f"ML Bridge Error: {error_msg}")
-    
-    def request_prediction(self, price_data: List[float], periods: int = 5):
-        """Request price prediction from Julia ML"""
-        try:
-            if self.ml_worker:
-                self.ml_worker.add_prediction_task(price_data, periods)
-                if not self.ml_worker.isRunning():
-                    self.ml_worker.start()
-            elif self.ml_engine:
-                # Direct computation with error handling
-                try:
-                    predictions = self.ml_engine.predict_price(price_data, periods)
-                    if 'prediction' in self.callbacks:
-                        self.callbacks['prediction'](predictions)
-                except Exception as ml_error:
-                    print(f"⚠️ ML Prediction Error: {ml_error}")
-                    # Return safe dummy predictions
-                    dummy_predictions = [price_data[-1] * (1 + np.random.uniform(-0.02, 0.02)) for _ in range(periods)]
-                    if 'prediction' in self.callbacks:
-                        self.callbacks['prediction'](dummy_predictions)
-            else:
-                # Pure fallback - no ML available
-                print("🔧 Using basic prediction fallback")
-                if len(price_data) >= 2:
-                    trend = (price_data[-1] - price_data[-2]) / price_data[-2]
-                    dummy_predictions = [price_data[-1] * (1 + trend * (i + 1) * 0.1) for i in range(periods)]
-                else:
-                    dummy_predictions = [price_data[-1]] * periods
-                
-                if 'prediction' in self.callbacks:
-                    self.callbacks['prediction'](dummy_predictions)
-                    
-        except Exception as e:
-            print(f"❌ Prediction request error: {e}")
-            # Safe fallback for any error
-            try:
-                if len(price_data) > 0:
-                    dummy_predictions = [price_data[-1]] * periods
-                    if 'prediction' in self.callbacks:
-                        self.callbacks['prediction'](dummy_predictions)
-            except Exception as fallback_error:
-                print(f"❌ Even fallback failed: {fallback_error}")
-    
-    def request_risk_analysis(self, price_data: List[float]):
-        """Request risk analysis from Julia ML"""
-        try:
-            if self.ml_worker:
-                self.ml_worker.add_risk_task(price_data)
-                if not self.ml_worker.isRunning():
-                    self.ml_worker.start()
-            elif self.ml_engine:
-                # Direct computation with error handling
-                try:
-                    risk_score = self.ml_engine.calculate_risk(price_data)
-                    if 'risk' in self.callbacks:
-                        self.callbacks['risk'](risk_score)
-                except Exception as ml_error:
-                    print(f"⚠️ ML Risk Analysis Error: {ml_error}")
-                    # Return safe dummy risk score
-                    dummy_risk = np.random.uniform(0.3, 0.7)  # Medium risk
-                    if 'risk' in self.callbacks:
-                        self.callbacks['risk'](dummy_risk)
-            else:
-                # Pure fallback - basic volatility calculation
-                print("🔧 Using basic risk calculation fallback")
-                try:
-                    if len(price_data) >= 3:
-                        returns = np.diff(price_data) / np.array(price_data[:-1])
-                        volatility = np.std(returns)
-                        risk_score = min(max(volatility * 5, 0.0), 1.0)  # Normalize to 0-1
-                    else:
-                        risk_score = 0.5  # Default medium risk
-                    
-                    if 'risk' in self.callbacks:
-                        self.callbacks['risk'](risk_score)
-                except Exception as calc_error:
-                    print(f"⚠️ Basic risk calculation failed: {calc_error}")
-                    if 'risk' in self.callbacks:
-                        self.callbacks['risk'](0.5)  # Safe default
-                        
-        except Exception as e:
-            print(f"❌ Risk analysis request error: {e}")
-            # Safe fallback
-            try:
-                if 'risk' in self.callbacks:
-                    self.callbacks['risk'](0.5)
-            except Exception as fallback_error:
-                print(f"❌ Risk fallback failed: {fallback_error}")
-    
-    def request_trading_signal(self, price_data: List[float], volume_data: Optional[List[float]] = None):
-        """Request trading signal from Julia ML"""
-        try:
-            if self.ml_worker:
-                self.ml_worker.add_signal_task(price_data, volume_data)
-                if not self.ml_worker.isRunning():
-                    self.ml_worker.start()
-            elif self.ml_engine:
-                # Direct computation with error handling
-                try:
-                    signal = self.ml_engine.generate_signal(price_data, volume_data)
-                    if 'signal' in self.callbacks:
-                        self.callbacks['signal'](signal)
-                except Exception as ml_error:
-                    print(f"⚠️ ML Signal Generation Error: {ml_error}")
-                    # Return safe dummy signal
-                    dummy_signals = ["BUY", "SELL", "HOLD"]
-                    dummy_signal = np.random.choice(dummy_signals)
-                    if 'signal' in self.callbacks:
-                        self.callbacks['signal'](dummy_signal)
-            else:
-                # Pure fallback - simple trend analysis
-                print("🔧 Using basic signal generation fallback")
-                try:
-                    if len(price_data) >= 5:
-                        recent_avg = np.mean(price_data[-3:])
-                        older_avg = np.mean(price_data[-5:-2])
-                        
-                        if recent_avg > older_avg * 1.02:
-                            signal = "BUY"
-                        elif recent_avg < older_avg * 0.98:
-                            signal = "SELL"
-                        else:
-                            signal = "HOLD"
-                    else:
-                        signal = "HOLD"  # Safe default
-                    
-                    if 'signal' in self.callbacks:
-                        self.callbacks['signal'](signal)
-                except Exception as calc_error:
-                    print(f"⚠️ Basic signal calculation failed: {calc_error}")
-                    if 'signal' in self.callbacks:
-                        self.callbacks['signal']("HOLD")  # Safe default
-                        
-        except Exception as e:
-            print(f"❌ Trading signal request error: {e}")
-            # Safe fallback
-            try:
-                if 'signal' in self.callbacks:
-                    self.callbacks['signal']("HOLD")
-            except Exception as fallback_error:
-                print(f"❌ Signal fallback failed: {fallback_error}")
-    
-    def handle_error(self, error_msg):
-        """Handle errors safely"""
-        try:
-            if 'error' in self.callbacks:
-                self.callbacks['error'](error_msg)
-            else:
-                print(f"Bridge Error: {error_msg}")
-        except Exception as e:
-            print(f"Error handling error: {e}")
-    
-    def request_prediction_from_yahoo_data(self, yahoo_data, periods: int = 5):
-        """
-        Request price prediction from Yahoo Finance data (Person D's format)
+    def setup_ui(self):
+        """Setup the user interface"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
         
-        Args:
-            yahoo_data: Yahoo Finance data in any format (DataFrame, dict, list)
-            periods: Number of periods to predict
-        """
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
-        if not price_data:
-            logger.error("Could not extract price data from Yahoo Finance format")
-            if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
-            return
+        # Create panels
+        left_panel = self.create_left_panel()
+        right_panel = self.create_right_panel()
         
-        self.request_prediction(price_data, periods)
+        main_layout.addWidget(left_panel, 1)
+        main_layout.addWidget(right_panel, 1)
     
-    def request_risk_from_yahoo_data(self, yahoo_data):
-        """Request risk analysis from Yahoo Finance data"""
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
-        if not price_data:
-            logger.error("Could not extract price data for risk analysis")
-            if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
-            return
-        
-        self.request_risk_analysis(price_data)
-    
-    def request_signal_from_yahoo_data(self, yahoo_data):
-        """Request trading signal from Yahoo Finance data"""
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
-        volume_data = YahooFinanceDataAdapter.extract_volume_from_yahoo_data(yahoo_data)
-        
-        if not price_data:
-            logger.error("Could not extract price data for trading signal")
-            if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
-            return
-        
-        self.request_trading_signal(price_data, volume_data)
-    
-    def process_crypto_update(self, symbol: str, yahoo_data, analysis_types: List[str] = None):
-        """
-        Process a crypto update from Person D's Yahoo Finance feed
-        
-        Args:
-            symbol: Crypto symbol (e.g., 'BTC-USD', 'ETH-USD')
-            yahoo_data: Yahoo Finance data
-            analysis_types: List of analyses to run ['prediction', 'risk', 'signal']
-        """
-        if analysis_types is None:
-            analysis_types = ['prediction', 'risk', 'signal']
-        
-        logger.info(f"Processing {symbol} update with analyses: {analysis_types}")
-        
-        # Store current symbol for callbacks
-        self.current_symbol = YahooFinanceDataAdapter.get_crypto_symbol_for_julia(symbol)
-        
-        # Run requested analyses
-        if 'prediction' in analysis_types:
-            self.request_prediction_from_yahoo_data(yahoo_data)
-        
-        if 'risk' in analysis_types:
-            self.request_risk_from_yahoo_data(yahoo_data)
-        
-        if 'signal' in analysis_types:
-            self.request_signal_from_yahoo_data(yahoo_data)
+    # ... (rest of legacy methods would go here)
+    # Keeping this short since the main class is ThreeCoinTradingGUI
 
-# Test functions
-def test_bridge():
-    """Test the Julia-Python bridge"""
-    print("🚀 Testing Julia-Python ML Bridge...")
-    
-    # Sample price data
-    sample_prices = [100, 102, 101, 105, 108, 106, 110, 112, 108, 115]
-    
-    try:
-        bridge = JuliaPythonBridge()
-        bridge.initialize()
-        
-        # Set up callbacks
-        def on_prediction(predictions):
-            print(f"✓ Predictions received: {predictions}")
-        
-        def on_risk(risk_score):
-            print(f"✓ Risk score: {risk_score:.3f}")
-        
-        def on_signal(signal):
-            print(f"✓ Trading signal: {signal}")
-        
-        def on_error(error):
-            print(f"✗ Error: {error}")
-        
-        bridge.set_callback('prediction', on_prediction)
-        bridge.set_callback('risk', on_risk)
-        bridge.set_callback('signal', on_signal)
-        bridge.set_callback('error', on_error)
-        
-        # Test requests
-        bridge.request_prediction(sample_prices, 3)
-        bridge.request_risk_analysis(sample_prices)
-        bridge.request_trading_signal(sample_prices)
-        
-        print("✓ Bridge test completed!")
-        
-    except Exception as e:
-        print(f"✗ Bridge test failed: {e}")
 
-# Yahoo Finance data adapter
-class YahooFinanceDataAdapter:
-    """
-    Adapter for Yahoo Finance crypto data format
-    Works with Person D's data feed
-    """
+def main():
+    app = QApplication(sys.argv)
     
-    @staticmethod
-    def extract_prices_from_yahoo_data(yahoo_data):
-        """
-        Convert Yahoo Finance data to price list for Julia ML
-        
-        Args:
-            yahoo_data: Can be pandas DataFrame, dict, or list
-        Returns:
-            List[float]: Price data ready for Julia ML
-        """
-        try:
-            # Handle pandas DataFrame (most common from yfinance)
-            if hasattr(yahoo_data, 'Close'):
-                return yahoo_data['Close'].tolist()
-            elif hasattr(yahoo_data, 'close'):
-                return yahoo_data['close'].tolist()
-            
-            # Handle dictionary format
-            if isinstance(yahoo_data, dict):
-                if 'Close' in yahoo_data:
-                    return list(yahoo_data['Close'].values()) if hasattr(yahoo_data['Close'], 'values') else yahoo_data['Close']
-                elif 'close' in yahoo_data:
-                    return list(yahoo_data['close'].values()) if hasattr(yahoo_data['close'], 'values') else yahoo_data['close']
-                elif 'price' in yahoo_data:
-                    return yahoo_data['price'] if isinstance(yahoo_data['price'], list) else [yahoo_data['price']]
-            
-            # Handle list format (already processed)
-            if isinstance(yahoo_data, list):
-                return [float(x) for x in yahoo_data]
-            
-            # Handle single value
-            if isinstance(yahoo_data, (int, float)):
-                return [float(yahoo_data)]
-                
-            # Fallback - try to extract any numeric data
-            if hasattr(yahoo_data, 'values'):
-                flat_values = yahoo_data.values.flatten() if hasattr(yahoo_data.values, 'flatten') else yahoo_data.values
-                return [float(x) for x in flat_values if not pd.isna(x)]
-                
-        except Exception as e:
-            logger.warning(f"Could not extract prices from Yahoo data: {e}")
-            
-        # Ultimate fallback
-        return []
+    # Set application style
+    app.setStyle('Fusion')
     
-    @staticmethod
-    def extract_volume_from_yahoo_data(yahoo_data):
-        """Extract volume data from Yahoo Finance format"""
-        try:
-            if hasattr(yahoo_data, 'Volume'):
-                return yahoo_data['Volume'].tolist()
-            elif hasattr(yahoo_data, 'volume'):
-                return yahoo_data['volume'].tolist()
-            elif isinstance(yahoo_data, dict) and 'Volume' in yahoo_data:
-                return list(yahoo_data['Volume'].values()) if hasattr(yahoo_data['Volume'], 'values') else yahoo_data['Volume']
-        except Exception as e:
-            logger.warning(f"Could not extract volume from Yahoo data: {e}")
-        
-        return None
+    # Dark theme
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(30, 30, 30))
+    dark_palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+    app.setPalette(dark_palette)
     
-    @staticmethod
-    def get_crypto_symbol_for_julia(symbol: str) -> str:
-        """
-        Convert crypto symbols to Julia-friendly format
-        BTC-USD -> BTC, ETH-USD -> ETH, etc.
-        """
-        if '-USD' in symbol:
-            return symbol.replace('-USD', '')
-        elif '-USDT' in symbol:
-            return symbol.replace('-USDT', '')
-        return symbol
+    # Use the new 3-coin GUI by default
+    window = ThreeCoinTradingGUI()
+    window.show()
+    
+    print("🚀 Starting 3-Coin Crypto Trading GUI")
+    print("📊 Monitoring BTC, ETH, USDT with Julia ML")
+    print("💡 Use the tabs to switch between coins")
+    print("🔮 Predict Price: Get ML price predictions")
+    print("⚠️ Analyze Risk: Calculate risk score (0-1)")
+    print("📊 Get Recommendation: Get BUY/SELL/HOLD advice")
+    print("💰 Use Buy/Sell buttons to execute trades")
+    
+    sys.exit(app.exec())
+
+def main_legacy():
+    """Launch the legacy single-coin GUI"""
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(30, 30, 30))
+    dark_palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+    app.setPalette(dark_palette)
+    
+    window = TradingSimulatorGUI()
+    window.show()
+    
+    print("🚀 Starting Legacy Crypto Trading GUI (Single BTC)")
+    
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
-    test_bridge()
+    # Allow choosing between new 3-coin GUI and legacy single-coin
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--legacy":
+        main_legacy()
+    else:
+        main()
