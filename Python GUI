@@ -434,8 +434,8 @@ class ThreeCoinTradingGUI(QMainWindow):
         
         # Generate data for each coin with realistic base prices
         base_prices = {
-            'BTC': 45000,  # Bitcoin ~$45k
-            'ETH': 2500,   # Ethereum ~$2.5k  
+            'BTC': 92200,  # Bitcoin ~$92.2k
+            'ETH': 3000,   # Ethereum ~$3k  
             'USDT': 1.0    # Tether ~$1 (stablecoin)
         }
         
@@ -488,8 +488,15 @@ class ThreeCoinTradingGUI(QMainWindow):
             
             new_price = coin_info['price_history'][-1] * (1 + change)
             
-            # Apply minimums
-            min_price = 0.98 if coin_id == 'USDT' else 1000
+            # Apply minimums based on realistic floors
+            if coin_id == 'USDT':
+                min_price = 0.98  # USDT should stay near $1
+            elif coin_id == 'BTC':
+                min_price = 30000  # BTC floor around $30k
+            elif coin_id == 'ETH':
+                min_price = 1000   # ETH floor around $1k
+            else:
+                min_price = 1000   # Default floor
             new_price = max(min_price, new_price)
             
             # Update data
@@ -546,6 +553,101 @@ class ThreeCoinTradingGUI(QMainWindow):
         # Update portfolio display (holdings and values)
         self.update_portfolio_display()
     
+    def set_manual_price(self, coin_id, new_price):
+        """Manually set the price for a specific coin"""
+        try:
+            coin_info = self.coins[coin_id]
+            
+            # Convert price input based on coin type
+            if coin_id == 'USDT':
+                actual_price = new_price / 100.0  # Convert cents to dollars
+            else:
+                actual_price = float(new_price)
+            
+            # Update price history
+            coin_info['price_history'].append(actual_price)
+            if len(coin_info['price_history']) > 50:
+                coin_info['price_history'] = coin_info['price_history'][-50:]
+            
+            # Update Yahoo data if it exists
+            if 'yahoo_data' in coin_info:
+                coin_info['yahoo_data']['Close'].append(actual_price)
+                coin_info['yahoo_data']['Volume'].append(random.randint(50000, 200000))
+            
+            # Update UI
+            self.update_coin_display(coin_id)
+            
+            # Log the manual change
+            self.log_coin_activity(coin_id, f"🎯 Manual price set to ${actual_price:.4f}")
+            
+        except Exception as e:
+            self.log_coin_activity(coin_id, f"❌ Failed to set manual price: {e}")
+    
+    def apply_price_shock(self, coin_id, shock_percentage):
+        """Apply a sudden price shock (pump or dump)"""
+        try:
+            coin_info = self.coins[coin_id]
+            if not coin_info['price_history']:
+                return
+            
+            current_price = coin_info['price_history'][-1]
+            new_price = current_price * (1 + shock_percentage)
+            
+            # Apply minimums
+            min_price = 0.98 if coin_id == 'USDT' else 1000
+            new_price = max(min_price, new_price)
+            
+            # Update price history
+            coin_info['price_history'].append(new_price)
+            if len(coin_info['price_history']) > 50:
+                coin_info['price_history'] = coin_info['price_history'][-50:]
+            
+            # Update Yahoo data if it exists
+            if 'yahoo_data' in coin_info:
+                coin_info['yahoo_data']['Close'].append(new_price)
+                coin_info['yahoo_data']['Volume'].append(random.randint(100000, 500000))  # Higher volume for shocks
+            
+            # Update UI
+            self.update_coin_display(coin_id)
+            
+            # Log the shock
+            shock_type = "PUMP" if shock_percentage > 0 else "DUMP"
+            self.log_coin_activity(coin_id, f"⚡ {shock_type}: {shock_percentage:+.1%} - New price: ${new_price:.4f}")
+            
+        except Exception as e:
+            self.log_coin_activity(coin_id, f"❌ Price shock failed: {e}")
+    
+    def pause_auto_updates(self, coin_id):
+        """Pause automatic price updates for a specific coin"""
+        if not hasattr(self, 'paused_coins'):
+            self.paused_coins = set()
+        
+        self.paused_coins.add(coin_id)
+        self.log_coin_activity(coin_id, "⏸️ Automatic price updates paused")
+        
+        # Update button states
+        pause_btn = getattr(self, f'{coin_id}_pause_btn', None)
+        resume_btn = getattr(self, f'{coin_id}_resume_btn', None)
+        if pause_btn:
+            pause_btn.setEnabled(False)
+        if resume_btn:
+            resume_btn.setEnabled(True)
+    
+    def resume_auto_updates(self, coin_id):
+        """Resume automatic price updates for a specific coin"""
+        if hasattr(self, 'paused_coins'):
+            self.paused_coins.discard(coin_id)
+        
+        self.log_coin_activity(coin_id, "▶️ Automatic price updates resumed")
+        
+        # Update button states
+        pause_btn = getattr(self, f'{coin_id}_pause_btn', None)
+        resume_btn = getattr(self, f'{coin_id}_resume_btn', None)
+        if pause_btn:
+            pause_btn.setEnabled(True)
+        if resume_btn:
+            resume_btn.setEnabled(False)
+    
     def log_global_activity(self, message):
         """Log activity to global ML log"""
         try:
@@ -569,6 +671,82 @@ class ThreeCoinTradingGUI(QMainWindow):
             self.log_global_activity(f"{coin_id}: {message}")
         except Exception as e:
             print(f"Logging error for {coin_id}: {e}")
+    
+    def execute_sell_order(self, coin_id):
+        """Execute a sell order for the specified coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            self.log_coin_activity(coin_id, "❌ No price data available for trading")
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        available_amount = self.portfolio[coin_id]
+        
+        if available_amount < 0.000001:  # Minimum amount
+            self.log_coin_activity(coin_id, f"❌ No {coin_id} holdings to sell")
+            return
+        
+        # For demo, sell 10% of holdings or all if less than $10 worth
+        amount_to_sell = available_amount * 0.1
+        if amount_to_sell * current_price < 10.0:
+            amount_to_sell = available_amount  # Sell all
+        
+        # Execute trade
+        usdt_received = amount_to_sell * current_price
+        self.portfolio[coin_id] -= amount_to_sell
+        self.portfolio['USDT'] += usdt_received
+        
+        # Record trade
+        trade_record = {
+            'type': 'SELL',
+            'coin': coin_id,
+            'amount': amount_to_sell,
+            'price': current_price,
+            'total': usdt_received,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        self.trading_history.append(trade_record)
+        
+        # Log and update display
+        self.log_coin_activity(coin_id, f"✅ SELL: {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f} = +${usdt_received:.2f}")
+        self.log_trading_activity(coin_id, f"📉 SELL {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f}")
+        self.update_portfolio_display()
+    
+    def log_trading_activity(self, coin_id, message):
+        """Log trading activity to specific coin's trading log"""
+        trading_log = getattr(self, f'{coin_id}_trading_log', None)
+        if trading_log:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}"
+            trading_log.append(log_entry)
+    
+    def update_portfolio_display(self):
+        """Update portfolio holdings display for all coins"""
+        total_portfolio_value = self.portfolio['USDT']  # Start with USDT
+        
+        for coin_id, coin_info in self.coins.items():
+            holdings = self.portfolio[coin_id]
+            
+            # Update holdings label
+            holdings_label = getattr(self, f'{coin_id}_holdings_label', None)
+            if holdings_label:
+                if coin_id == 'USDT':
+                    holdings_label.setText(f"USDT Balance: ${holdings:.2f}")
+                else:
+                    holdings_label.setText(f"{coin_id} Amount: {holdings:.6f}")
+            
+            # Update value label
+            value_label = getattr(self, f'{coin_id}_value_label', None)
+            if value_label and coin_info['price_history']:
+                current_price = coin_info['price_history'][-1]
+                value = holdings * current_price
+                value_label.setText(f"Value: ${value:.2f}")
+                
+                if coin_id != 'USDT':  # Don't double count USDT
+                    total_portfolio_value += value
+        
+        # Update total portfolio value
+        self.portfolio_value_label.setText(f"Portfolio Value: ${total_portfolio_value:.2f}")
     
     # ML Request methods for specific coins
     def request_coin_prediction(self, coin_id):
@@ -660,82 +838,6 @@ class ThreeCoinTradingGUI(QMainWindow):
         self.log_coin_activity(coin_id, f"✅ BUY: {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f} = ${usdt_to_spend:.2f}")
         self.log_trading_activity(coin_id, f"📈 BUY {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f}")
         self.update_portfolio_display()
-    
-    def execute_sell_order(self, coin_id):
-        """Execute a sell order for the specified coin"""
-        coin_info = self.coins[coin_id]
-        if not coin_info['price_history']:
-            self.log_coin_activity(coin_id, "❌ No price data available for trading")
-            return
-        
-        current_price = coin_info['price_history'][-1]
-        available_amount = self.portfolio[coin_id]
-        
-        if available_amount < 0.000001:  # Minimum amount
-            self.log_coin_activity(coin_id, f"❌ No {coin_id} holdings to sell")
-            return
-        
-        # For demo, sell 10% of holdings or all if less than $10 worth
-        amount_to_sell = available_amount * 0.1
-        if amount_to_sell * current_price < 10.0:
-            amount_to_sell = available_amount  # Sell all
-        
-        # Execute trade
-        usdt_received = amount_to_sell * current_price
-        self.portfolio[coin_id] -= amount_to_sell
-        self.portfolio['USDT'] += usdt_received
-        
-        # Record trade
-        trade_record = {
-            'type': 'SELL',
-            'coin': coin_id,
-            'amount': amount_to_sell,
-            'price': current_price,
-            'total': usdt_received,
-            'timestamp': datetime.now().strftime('%H:%M:%S')
-        }
-        self.trading_history.append(trade_record)
-        
-        # Log and update display
-        self.log_coin_activity(coin_id, f"✅ SELL: {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f} = +${usdt_received:.2f}")
-        self.log_trading_activity(coin_id, f"📉 SELL {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f}")
-        self.update_portfolio_display()
-    
-    def log_trading_activity(self, coin_id, message):
-        """Log trading activity to specific coin's trading log"""
-        trading_log = getattr(self, f'{coin_id}_trading_log', None)
-        if trading_log:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            log_entry = f"[{timestamp}] {message}"
-            trading_log.append(log_entry)
-    
-    def update_portfolio_display(self):
-        """Update portfolio holdings display for all coins"""
-        total_portfolio_value = self.portfolio['USDT']  # Start with USDT
-        
-        for coin_id, coin_info in self.coins.items():
-            holdings = self.portfolio[coin_id]
-            
-            # Update holdings label
-            holdings_label = getattr(self, f'{coin_id}_holdings_label', None)
-            if holdings_label:
-                if coin_id == 'USDT':
-                    holdings_label.setText(f"USDT Balance: ${holdings:.2f}")
-                else:
-                    holdings_label.setText(f"{coin_id} Amount: {holdings:.6f}")
-            
-            # Update value label
-            value_label = getattr(self, f'{coin_id}_value_label', None)
-            if value_label and coin_info['price_history']:
-                current_price = coin_info['price_history'][-1]
-                value = holdings * current_price
-                value_label.setText(f"Value: ${value:.2f}")
-                
-                if coin_id != 'USDT':  # Don't double count USDT
-                    total_portfolio_value += value
-        
-        # Update total portfolio value
-        self.portfolio_value_label.setText(f"Portfolio Value: ${total_portfolio_value:.2f}")
 
     # ML Callback Methods for 3-coin system
     def on_prediction_received(self, predictions):
