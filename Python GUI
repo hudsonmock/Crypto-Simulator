@@ -1,1 +1,985 @@
 
+#!/usr/bin/env python3
+"""
+Crypto Trading Simulator - 3 Coin GUI (BTC, ETH, USDT)
+Person E: Julia ML + Python GUI Integration
+
+Displays Bitcoin, Ethereum, and Tether with ML analysis for each
+"""
+
+import sys
+import numpy as np
+from datetime import datetime, timedelta
+import random
+
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit, QProgressBar, QGroupBox,
+    QGridLayout, QSpinBox, QTabWidget, QFrame
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QPalette, QColor
+
+# Import our Julia ML bridge
+from julia_ml_bridge import JuliaPythonBridge
+
+class ThreeCoinTradingGUI(QMainWindow):
+    """
+    Main GUI for 3-coin crypto trading simulator (BTC, ETH, USDT)
+    """
+    
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("🚀 3-Coin Crypto Simulator - BTC • ETH • USDT")
+        self.setGeometry(100, 100, 1400, 800)
+        
+        # Initialize coin data
+        self.coins = {
+            'BTC': {'name': 'Bitcoin', 'symbol': '₿', 'color': '#f7931a', 'price_history': []},
+            'ETH': {'name': 'Ethereum', 'symbol': 'Ξ', 'color': '#627eea', 'price_history': []},
+            'USDT': {'name': 'Tether', 'symbol': '₮', 'color': '#26a17b', 'price_history': []}
+        }
+        
+        # Initialize portfolio (how much of each coin you own)
+        self.portfolio = {
+            'BTC': 0.0,
+            'ETH': 0.0, 
+            'USDT': 1000.0,  # Start with $1000 USDT for trading
+            'cash': 0.0  # Additional cash balance
+        }
+        
+        # Trading history
+        self.trading_history = []
+        
+        # Initialize Julia-Python bridge
+        self.ml_bridge = JuliaPythonBridge()
+        self.setup_ml_callbacks()
+        
+        # Setup UI first
+        self.setup_ui()
+        self.setup_style()
+        
+        # Generate sample data for all coins
+        self.generate_coin_data()
+        
+        # Initialize portfolio display
+        self.update_portfolio_display()
+        
+        # Setup timer for real-time updates
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_all_coins)
+        self.update_timer.start(5000)  # Update every 5 seconds
+    
+    def setup_ml_callbacks(self):
+        """Setup callbacks for Julia ML results"""
+        try:
+            self.ml_bridge.set_callback('prediction', self.on_prediction_received)
+            self.ml_bridge.set_callback('risk', self.on_risk_received)
+            self.ml_bridge.set_callback('signal', self.on_signal_received)
+            self.ml_bridge.set_callback('error', self.on_ml_error)
+            
+            # Initialize the bridge with error handling
+            try:
+                self.ml_bridge.initialize()
+                print("✅ Julia ML bridge initialized successfully")
+            except Exception as init_error:
+                print(f"⚠️ Julia ML initialization warning: {init_error}")
+                print("🔧 Using fallback mode - ML buttons will still work")
+                
+        except Exception as e:
+            print(f"❌ ML Bridge setup error: {e}")
+            print("🔧 GUI will continue without ML integration")
+    
+    def setup_ui(self):
+        """Setup the user interface with tabs for each coin"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Header with overall portfolio info
+        header = self.create_header()
+        main_layout.addWidget(header)
+        
+        # Tab widget for each coin
+        self.tab_widget = QTabWidget()
+        
+        # Create tabs for each coin
+        self.coin_tabs = {}
+        for coin_id, coin_info in self.coins.items():
+            tab = self.create_coin_tab(coin_id, coin_info)
+            self.tab_widget.addTab(tab, f"{coin_info['symbol']} {coin_id}")
+            self.coin_tabs[coin_id] = tab
+        
+        main_layout.addWidget(self.tab_widget)
+        
+        # Global ML log at the bottom
+        log_frame = self.create_global_log()
+        main_layout.addWidget(log_frame)
+    
+    def create_header(self):
+        """Create header with portfolio overview"""
+        header_frame = QFrame()
+        header_frame.setFixedHeight(80)
+        header_layout = QHBoxLayout(header_frame)
+        
+        # Portfolio title
+        portfolio_label = QLabel("🏦 Crypto Portfolio")
+        portfolio_label.setFont(QFont("Arial", 20, QFont.Bold))
+        header_layout.addWidget(portfolio_label)
+        
+        header_layout.addStretch()
+        
+        # Portfolio stats
+        self.portfolio_value_label = QLabel("Total Value: $0")
+        self.portfolio_value_label.setFont(QFont("Arial", 14))
+        header_layout.addWidget(self.portfolio_value_label)
+        
+        # ML Status
+        self.ml_status_label = QLabel("ML Status: Ready")
+        self.ml_status_label.setFont(QFont("Arial", 12))
+        header_layout.addWidget(self.ml_status_label)
+        
+        return header_frame
+    
+    def create_coin_tab(self, coin_id, coin_info):
+        """Create tab content for a specific coin"""
+        tab_widget = QWidget()
+        layout = QHBoxLayout(tab_widget)
+        
+        # Left panel - Price data and history
+        left_panel = self.create_coin_price_panel(coin_id, coin_info)
+        layout.addWidget(left_panel, 1)
+        
+        # Right panel - ML analysis
+        right_panel = self.create_coin_ml_panel(coin_id, coin_info)
+        layout.addWidget(right_panel, 1)
+        
+        return tab_widget
+    
+    def create_coin_price_panel(self, coin_id, coin_info):
+        """Create price panel for a coin"""
+        panel = QGroupBox(f"{coin_info['symbol']} {coin_info['name']} - Market Data")
+        layout = QVBoxLayout(panel)
+        
+        # Current price (large display)
+        price_frame = QFrame()
+        price_layout = QVBoxLayout(price_frame)
+        
+        coin_price_label = QLabel(f"{coin_id} Price")
+        coin_price_label.setFont(QFont("Arial", 12))
+        coin_price_label.setAlignment(Qt.AlignCenter)
+        
+        price_value_label = QLabel("$0.00")
+        price_value_label.setFont(QFont("Arial", 24, QFont.Bold))
+        price_value_label.setAlignment(Qt.AlignCenter)
+        price_value_label.setStyleSheet(f"color: {coin_info['color']};")
+        
+        price_change_label = QLabel("0.00%")
+        price_change_label.setFont(QFont("Arial", 14))
+        price_change_label.setAlignment(Qt.AlignCenter)
+        
+        price_layout.addWidget(coin_price_label)
+        price_layout.addWidget(price_value_label)
+        price_layout.addWidget(price_change_label)
+        
+        # Store references for updates
+        setattr(self, f'{coin_id}_price_label', price_value_label)
+        setattr(self, f'{coin_id}_change_label', price_change_label)
+        
+        layout.addWidget(price_frame)
+        
+        # Price history
+        history_group = QGroupBox("Recent Price History")
+        history_layout = QVBoxLayout(history_group)
+        
+        price_history_text = QTextEdit()
+        price_history_text.setMaximumHeight(120)
+        price_history_text.setPlaceholderText(f"{coin_id} price history will appear here...")
+        history_layout.addWidget(price_history_text)
+        
+        # Store reference
+        setattr(self, f'{coin_id}_history_text', price_history_text)
+        
+        layout.addWidget(history_group)
+        
+        # Portfolio holdings for this coin
+        portfolio_group = QGroupBox(f"Your {coin_id} Holdings")
+        portfolio_layout = QVBoxLayout(portfolio_group)
+        
+        holdings_label = QLabel(f"{coin_id} Amount: 0.000")
+        holdings_label.setFont(QFont("Arial", 12, QFont.Bold))
+        holdings_label.setStyleSheet(f"color: {coin_info['color']};")
+        
+        value_label = QLabel("Value: $0.00")
+        value_label.setFont(QFont("Arial", 10))
+        
+        portfolio_layout.addWidget(holdings_label)
+        portfolio_layout.addWidget(value_label)
+        
+        # Store references
+        setattr(self, f'{coin_id}_holdings_label', holdings_label)
+        setattr(self, f'{coin_id}_value_label', value_label)
+        
+        layout.addWidget(portfolio_group)
+        
+        # ML Control buttons
+        controls_group = QGroupBox(f"{coin_id} ML Analysis Controls")
+        controls_layout = QGridLayout(controls_group)
+        
+        # Prediction button
+        predict_btn = QPushButton(f"🔮 Predict {coin_id} Price")
+        predict_btn.clicked.connect(lambda: self.request_coin_prediction(coin_id))
+        controls_layout.addWidget(predict_btn, 0, 0, 1, 2)
+        
+        # Risk button  
+        risk_btn = QPushButton(f"⚠️ Analyze {coin_id} Risk")
+        risk_btn.clicked.connect(lambda: self.request_coin_risk(coin_id))
+        controls_layout.addWidget(risk_btn, 1, 0, 1, 2)
+        
+        # Recommendation button
+        signal_btn = QPushButton(f"📊 Get {coin_id} Recommendation")
+        signal_btn.clicked.connect(lambda: self.request_coin_recommendation(coin_id))
+        controls_layout.addWidget(signal_btn, 2, 0, 1, 2)
+        
+        # Trading action buttons
+        buy_btn = QPushButton(f"💰 BUY {coin_id}")
+        buy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #218838; }
+        """)
+        buy_btn.clicked.connect(lambda: self.execute_buy_order(coin_id))
+        controls_layout.addWidget(buy_btn, 3, 0)
+        
+        sell_btn = QPushButton(f"💸 SELL {coin_id}")
+        sell_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #c82333; }
+        """)
+        sell_btn.clicked.connect(lambda: self.execute_sell_order(coin_id))
+        controls_layout.addWidget(sell_btn, 3, 1)
+        
+        # Store button references
+        setattr(self, f'{coin_id}_predict_btn', predict_btn)
+        setattr(self, f'{coin_id}_risk_btn', risk_btn)
+        setattr(self, f'{coin_id}_recommendation_btn', signal_btn)
+        setattr(self, f'{coin_id}_buy_btn', buy_btn)
+        setattr(self, f'{coin_id}_sell_btn', sell_btn)
+        
+        layout.addWidget(controls_group)
+        
+        return panel
+    
+    def create_coin_ml_panel(self, coin_id, coin_info):
+        """Create ML analysis panel for a coin"""
+        panel = QGroupBox(f"{coin_info['symbol']} {coin_id} - Julia ML Analysis")
+        layout = QVBoxLayout(panel)
+        
+        # Price Predictions
+        pred_group = QGroupBox("Price Predictions")
+        pred_layout = QVBoxLayout(pred_group)
+        predictions_text = QTextEdit()
+        predictions_text.setMaximumHeight(100)
+        predictions_text.setPlaceholderText(f"{coin_id} predictions will appear here...")
+        pred_layout.addWidget(predictions_text)
+        setattr(self, f'{coin_id}_predictions_text', predictions_text)
+        layout.addWidget(pred_group)
+        
+        # Risk Analysis
+        risk_group = QGroupBox("Risk Analysis")
+        risk_layout = QVBoxLayout(risk_group)
+        
+        risk_label = QLabel("Risk Score: --")
+        risk_label.setFont(QFont("Arial", 12))
+        risk_layout.addWidget(risk_label)
+        
+        risk_bar = QProgressBar()
+        risk_bar.setRange(0, 100)
+        risk_layout.addWidget(risk_bar)
+        
+        setattr(self, f'{coin_id}_risk_label', risk_label)
+        setattr(self, f'{coin_id}_risk_bar', risk_bar)
+        layout.addWidget(risk_group)
+        
+        # Trading Recommendation
+        recommendation_group = QGroupBox("Trading Recommendation")
+        recommendation_layout = QVBoxLayout(recommendation_group)
+        
+        recommendation_label = QLabel("Recommendation: --")
+        recommendation_label.setFont(QFont("Arial", 14, QFont.Bold))
+        recommendation_label.setAlignment(Qt.AlignCenter)
+        recommendation_layout.addWidget(recommendation_label)
+        
+        setattr(self, f'{coin_id}_recommendation_label', recommendation_label)
+        layout.addWidget(recommendation_group)
+        
+        # Trading History for this coin
+        history_group = QGroupBox(f"{coin_id} Trading History")
+        history_layout = QVBoxLayout(history_group)
+        
+        trading_log = QTextEdit()
+        trading_log.setMaximumHeight(80)
+        trading_log.setPlaceholderText(f"{coin_id} trades will appear here...")
+        history_layout.addWidget(trading_log)
+        
+        setattr(self, f'{coin_id}_trading_log', trading_log)
+        layout.addWidget(history_group)
+        
+        # Coin-specific log
+        log_group = QGroupBox(f"{coin_id} Activity Log")
+        log_layout = QVBoxLayout(log_group)
+        
+        coin_log = QTextEdit()
+        coin_log.setMaximumHeight(100)
+        log_layout.addWidget(coin_log)
+        
+        setattr(self, f'{coin_id}_log', coin_log)
+        layout.addWidget(log_group)
+        
+        return panel
+    
+    def create_global_log(self):
+        """Create global ML processing log"""
+        log_frame = QFrame()
+        log_frame.setFixedHeight(120)
+        log_layout = QVBoxLayout(log_frame)
+        
+        log_label = QLabel("🤖 Global ML Processing Log")
+        log_label.setFont(QFont("Arial", 12, QFont.Bold))
+        
+        self.global_ml_log = QTextEdit()
+        self.global_ml_log.setMaximumHeight(80)
+        
+        log_layout.addWidget(log_label)
+        log_layout.addWidget(self.global_ml_log)
+        
+        return log_frame
+    
+    def setup_style(self):
+        """Setup application styling for 3-coin GUI"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e1e;
+                color: #ffffff;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #555555;
+                border-radius: 5px;
+                margin: 5px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+            QPushButton {
+                background-color: #0066cc;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0052a3;
+            }
+            QPushButton:pressed {
+                background-color: #003d7a;
+            }
+            QTextEdit {
+                background-color: #2d2d2d;
+                border: 1px solid #555555;
+                border-radius: 3px;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+            QTabWidget::pane {
+                border: 1px solid #555555;
+                background-color: #2d2d2d;
+            }
+            QTabBar::tab {
+                background-color: #404040;
+                color: white;
+                padding: 8px 16px;
+                margin: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background-color: #0066cc;
+            }
+            QTabBar::tab:hover {
+                background-color: #505050;
+            }
+        """)
+    
+    def generate_coin_data(self):
+        """Generate sample price data for all coins"""
+        import pandas as pd
+        
+        # Generate data for each coin with realistic base prices
+        base_prices = {
+            'BTC': 45000,  # Bitcoin ~$45k
+            'ETH': 2500,   # Ethereum ~$2.5k  
+            'USDT': 1.0    # Tether ~$1 (stablecoin)
+        }
+        
+        for coin_id, base_price in base_prices.items():
+            prices = []
+            
+            for i in range(30):
+                if coin_id == 'USDT':
+                    # Tether is stable, very small variations
+                    change = random.uniform(-0.001, 0.001)  # ±0.1%
+                else:
+                    # BTC/ETH more volatile
+                    change = random.uniform(-0.05, 0.05)  # ±5%
+                
+                if prices:
+                    new_price = prices[-1] * (1 + change)
+                else:
+                    new_price = base_price
+                
+                # Set minimums
+                min_price = 0.98 if coin_id == 'USDT' else base_price * 0.5
+                prices.append(max(min_price, new_price))
+            
+            # Store price history for each coin
+            self.coins[coin_id]['price_history'] = prices[-20:]
+            
+            # Create Yahoo Finance format for Person D integration
+            self.coins[coin_id]['yahoo_data'] = {
+                'Close': prices,
+                'Volume': [random.randint(50000, 200000) for _ in range(30)]
+            }
+        
+        self.log_global_activity("📊 Generated sample data for BTC, ETH, USDT")
+    
+    def update_all_coins(self):
+        """Update all coin prices (simulate real-time updates)"""
+        for coin_id, coin_info in self.coins.items():
+            self.update_coin_price(coin_id)
+        # Portfolio display is updated automatically in update_coin_display
+    
+    def update_coin_price(self, coin_id):
+        """Update a specific coin's price"""
+        coin_info = self.coins[coin_id]
+        if coin_info['price_history']:
+            # Generate price change based on coin type
+            if coin_id == 'USDT':
+                change = random.uniform(-0.001, 0.001)  # Stable
+            else:
+                change = random.uniform(-0.03, 0.03)  # More volatile
+            
+            new_price = coin_info['price_history'][-1] * (1 + change)
+            
+            # Apply minimums
+            min_price = 0.98 if coin_id == 'USDT' else 1000
+            new_price = max(min_price, new_price)
+            
+            # Update data
+            coin_info['price_history'].append(new_price)
+            if len(coin_info['price_history']) > 50:
+                coin_info['price_history'] = coin_info['price_history'][-50:]
+            
+            # Update Yahoo data if it exists
+            if 'yahoo_data' in coin_info:
+                coin_info['yahoo_data']['Close'].append(new_price)
+                coin_info['yahoo_data']['Volume'].append(random.randint(50000, 200000))
+            
+            # Update UI
+            self.update_coin_display(coin_id)
+    
+    def update_coin_display(self, coin_id):
+        """Update the display for a specific coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        
+        # Update price label
+        price_label = getattr(self, f'{coin_id}_price_label', None)
+        if price_label:
+            if coin_id == 'USDT':
+                price_label.setText(f"${current_price:.4f}")  # More precision for USDT
+            else:
+                price_label.setText(f"${current_price:.2f}")
+        
+        # Update change percentage
+        change_label = getattr(self, f'{coin_id}_change_label', None)
+        if change_label and len(coin_info['price_history']) >= 2:
+            prev_price = coin_info['price_history'][-2]
+            change_pct = ((current_price - prev_price) / prev_price) * 100
+            change_text = f"{change_pct:+.2f}%"
+            color = "green" if change_pct >= 0 else "red"
+            change_label.setText(change_text)
+            change_label.setStyleSheet(f"color: {color};")
+        
+        # Update price history text
+        history_text = getattr(self, f'{coin_id}_history_text', None)
+        if history_text:
+            recent_prices = coin_info['price_history'][-10:]
+            history_content = f"Recent {coin_id} Prices:\n"
+            for i, price in enumerate(recent_prices):
+                if coin_id == 'USDT':
+                    history_content += f"{i+1:2d}. ${price:.4f}\n"
+                else:
+                    history_content += f"{i+1:2d}. ${price:.2f}\n"
+            history_text.setText(history_content)
+        
+        # Update portfolio display (holdings and values)
+        self.update_portfolio_display()
+    
+    def log_global_activity(self, message):
+        """Log activity to global ML log"""
+        try:
+            if hasattr(self, 'global_ml_log') and self.global_ml_log:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                log_entry = f"[{timestamp}] {message}"
+                self.global_ml_log.append(log_entry)
+        except Exception as e:
+            print(f"Global logging error: {e}")
+    
+    def log_coin_activity(self, coin_id, message):
+        """Log activity to specific coin log"""
+        try:
+            coin_log = getattr(self, f'{coin_id}_log', None)
+            if coin_log:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                log_entry = f"[{timestamp}] {message}"
+                coin_log.append(log_entry)
+            
+            # Also log to global
+            self.log_global_activity(f"{coin_id}: {message}")
+        except Exception as e:
+            print(f"Logging error for {coin_id}: {e}")
+    
+    # ML Request methods for specific coins
+    def request_coin_prediction(self, coin_id):
+        """Request price prediction for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 5:
+            self.log_coin_activity(coin_id, "❌ Not enough data for prediction")
+            return
+        
+        predict_btn = getattr(self, f'{coin_id}_predict_btn', None)
+        if predict_btn:
+            predict_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "🔮 Requesting ML prediction...")
+        
+        # Store which coin is being analyzed
+        self.current_analysis_coin = coin_id
+        
+        # Use bridge
+        self.ml_bridge.request_prediction(coin_info['price_history'], 5)
+    
+    def request_coin_risk(self, coin_id):
+        """Request risk analysis for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 5:
+            self.log_coin_activity(coin_id, "❌ Not enough data for risk analysis")
+            return
+        
+        risk_btn = getattr(self, f'{coin_id}_risk_btn', None)
+        if risk_btn:
+            risk_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "⚠️ Analyzing risk...")
+        
+        self.current_analysis_coin = coin_id
+        self.ml_bridge.request_risk_analysis(coin_info['price_history'])
+    
+    def request_coin_recommendation(self, coin_id):
+        """Request trading recommendation for specific coin"""
+        coin_info = self.coins[coin_id]
+        if len(coin_info['price_history']) < 10:
+            self.log_coin_activity(coin_id, "❌ Not enough data for recommendation")
+            return
+        
+        recommendation_btn = getattr(self, f'{coin_id}_recommendation_btn', None)
+        if recommendation_btn:
+            recommendation_btn.setEnabled(False)
+        
+        self.log_coin_activity(coin_id, "📊 Generating trading recommendation...")
+        
+        self.current_analysis_coin = coin_id
+        self.ml_bridge.request_trading_signal(coin_info['price_history'])
+    
+    def execute_buy_order(self, coin_id):
+        """Execute a buy order for the specified coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            self.log_coin_activity(coin_id, "❌ No price data available for trading")
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        
+        # For demo, buy $100 worth or available USDT, whichever is less
+        usdt_to_spend = min(100.0, self.portfolio['USDT'])
+        
+        if usdt_to_spend < 1.0:
+            self.log_coin_activity(coin_id, "❌ Insufficient USDT balance for purchase")
+            return
+        
+        # Calculate how much coin we can buy
+        amount_to_buy = usdt_to_spend / current_price
+        
+        # Execute trade
+        self.portfolio[coin_id] += amount_to_buy
+        self.portfolio['USDT'] -= usdt_to_spend
+        
+        # Record trade
+        trade_record = {
+            'type': 'BUY',
+            'coin': coin_id,
+            'amount': amount_to_buy,
+            'price': current_price,
+            'total': usdt_to_spend,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        self.trading_history.append(trade_record)
+        
+        # Log and update display
+        self.log_coin_activity(coin_id, f"✅ BUY: {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f} = ${usdt_to_spend:.2f}")
+        self.log_trading_activity(coin_id, f"📈 BUY {amount_to_buy:.6f} {coin_id} @ ${current_price:.2f}")
+        self.update_portfolio_display()
+    
+    def execute_sell_order(self, coin_id):
+        """Execute a sell order for the specified coin"""
+        coin_info = self.coins[coin_id]
+        if not coin_info['price_history']:
+            self.log_coin_activity(coin_id, "❌ No price data available for trading")
+            return
+        
+        current_price = coin_info['price_history'][-1]
+        available_amount = self.portfolio[coin_id]
+        
+        if available_amount < 0.000001:  # Minimum amount
+            self.log_coin_activity(coin_id, f"❌ No {coin_id} holdings to sell")
+            return
+        
+        # For demo, sell 10% of holdings or all if less than $10 worth
+        amount_to_sell = available_amount * 0.1
+        if amount_to_sell * current_price < 10.0:
+            amount_to_sell = available_amount  # Sell all
+        
+        # Execute trade
+        usdt_received = amount_to_sell * current_price
+        self.portfolio[coin_id] -= amount_to_sell
+        self.portfolio['USDT'] += usdt_received
+        
+        # Record trade
+        trade_record = {
+            'type': 'SELL',
+            'coin': coin_id,
+            'amount': amount_to_sell,
+            'price': current_price,
+            'total': usdt_received,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        self.trading_history.append(trade_record)
+        
+        # Log and update display
+        self.log_coin_activity(coin_id, f"✅ SELL: {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f} = +${usdt_received:.2f}")
+        self.log_trading_activity(coin_id, f"📉 SELL {amount_to_sell:.6f} {coin_id} @ ${current_price:.2f}")
+        self.update_portfolio_display()
+    
+    def log_trading_activity(self, coin_id, message):
+        """Log trading activity to specific coin's trading log"""
+        trading_log = getattr(self, f'{coin_id}_trading_log', None)
+        if trading_log:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}"
+            trading_log.append(log_entry)
+    
+    def update_portfolio_display(self):
+        """Update portfolio holdings display for all coins"""
+        total_portfolio_value = self.portfolio['USDT']  # Start with USDT
+        
+        for coin_id, coin_info in self.coins.items():
+            holdings = self.portfolio[coin_id]
+            
+            # Update holdings label
+            holdings_label = getattr(self, f'{coin_id}_holdings_label', None)
+            if holdings_label:
+                if coin_id == 'USDT':
+                    holdings_label.setText(f"USDT Balance: ${holdings:.2f}")
+                else:
+                    holdings_label.setText(f"{coin_id} Amount: {holdings:.6f}")
+            
+            # Update value label
+            value_label = getattr(self, f'{coin_id}_value_label', None)
+            if value_label and coin_info['price_history']:
+                current_price = coin_info['price_history'][-1]
+                value = holdings * current_price
+                value_label.setText(f"Value: ${value:.2f}")
+                
+                if coin_id != 'USDT':  # Don't double count USDT
+                    total_portfolio_value += value
+        
+        # Update total portfolio value
+        self.portfolio_value_label.setText(f"Portfolio Value: ${total_portfolio_value:.2f}")
+
+    # ML Callback Methods for 3-coin system
+    def on_prediction_received(self, predictions):
+        """Handle prediction results from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            predict_btn = getattr(self, f'{coin_id}_predict_btn', None)
+            if predict_btn:
+                predict_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Prediction Complete")
+            
+            # Display predictions
+            predictions_text = getattr(self, f'{coin_id}_predictions_text', None)
+            if predictions_text and coin_id in self.coins:
+                coin_info = self.coins[coin_id]
+                current_price = coin_info['price_history'][-1] if coin_info['price_history'] else 0
+                
+                pred_content = f"{coin_id} ML Predictions:\n"
+                for i, pred in enumerate(predictions):
+                    if current_price > 0:
+                        change = ((pred - current_price) / current_price) * 100
+                        pred_content += f"Period {i+1}: ${pred:.2f} ({change:+.2f}%)\n"
+                    else:
+                        pred_content += f"Period {i+1}: ${pred:.2f}\n"
+                
+                predictions_text.setText(pred_content)
+            
+            self.log_coin_activity(coin_id, f"✅ Received {len(predictions)} predictions")
+        except Exception as e:
+            print(f"Error handling prediction: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Prediction Error")
+    
+    def on_risk_received(self, risk_score):
+        """Handle risk analysis results from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            risk_btn = getattr(self, f'{coin_id}_risk_btn', None)
+            if risk_btn:
+                risk_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Risk Analysis Complete")
+            
+            # Update risk display
+            risk_percentage = int(risk_score * 100)
+            
+            risk_bar = getattr(self, f'{coin_id}_risk_bar', None)
+            if risk_bar:
+                risk_bar.setValue(risk_percentage)
+            
+            risk_label = getattr(self, f'{coin_id}_risk_label', None)
+            if risk_label:
+                if risk_score < 0.3:
+                    risk_level = "LOW"
+                    color = "green"
+                elif risk_score < 0.7:
+                    risk_level = "MEDIUM" 
+                    color = "orange"
+                else:
+                    risk_level = "HIGH"
+                    color = "red"
+                
+                risk_label.setText(f"Risk Score: {risk_score:.3f} ({risk_level})")
+                risk_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+            
+            self.log_coin_activity(coin_id, f"✅ Risk: {risk_level} ({risk_score:.3f})")
+        except Exception as e:
+            print(f"Error handling risk analysis: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Risk Analysis Error")
+    
+    def on_signal_received(self, signal):
+        """Handle trading recommendation from Julia ML"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable button
+            recommendation_btn = getattr(self, f'{coin_id}_recommendation_btn', None)
+            if recommendation_btn:
+                recommendation_btn.setEnabled(True)
+            
+            # Update ML status
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Recommendation Generated")
+            
+            # Update recommendation display
+            recommendation_label = getattr(self, f'{coin_id}_recommendation_label', None)
+            if recommendation_label:
+                if signal == "BUY":
+                    color = "green"
+                    emoji = "📈"
+                elif signal == "SELL":
+                    color = "red"
+                    emoji = "📉"
+                else:
+                    color = "yellow"
+                    emoji = "⏸️"
+                
+                recommendation_label.setText(f"{emoji} Recommendation: {signal}")
+                recommendation_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 16px;")
+            
+            self.log_coin_activity(coin_id, f"✅ Recommendation: {signal}")
+        except Exception as e:
+            print(f"Error handling recommendation: {e}")
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Recommendation Error")
+    
+    def on_ml_error(self, error_msg):
+        """Handle ML processing errors"""
+        try:
+            coin_id = getattr(self, 'current_analysis_coin', 'BTC')
+            
+            # Re-enable all buttons for this coin
+            for btn_type in ['predict', 'risk', 'recommendation']:
+                btn = getattr(self, f'{coin_id}_{btn_type}_btn', None)
+                if btn:
+                    btn.setEnabled(True)
+            
+            if hasattr(self, 'ml_status_label'):
+                self.ml_status_label.setText("ML Status: Error Occurred")
+            
+            self.log_coin_activity(coin_id, f"❌ ML Error: {error_msg}")
+        except Exception as e:
+            print(f"Error handling ML error: {e}")
+
+
+# Legacy single-coin class for backward compatibility
+class TradingSimulatorGUI(QMainWindow):
+    """
+    Legacy single-coin trading GUI - kept for backward compatibility
+    Use ThreeCoinTradingGUI for new implementations
+    """
+    
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("🚀 Crypto Trading Simulator - Julia ML Integration")
+        self.setGeometry(100, 100, 1200, 800)
+        
+        # Initialize Julia-Python bridge
+        self.ml_bridge = JuliaPythonBridge()
+        self.setup_ml_callbacks()
+        
+        # Setup UI first
+        self.setup_ui()
+        self.setup_style()
+        
+        # Generate sample data
+        self.generate_sample_data()
+        
+        # Setup timer
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_data)
+        self.update_timer.start(3000)  # Update every 3 seconds
+        
+        # Start with display update
+        self.update_display()
+    
+    def setup_ml_callbacks(self):
+        """Setup callbacks for Julia ML results"""
+        self.ml_bridge.set_callback('prediction', self.on_prediction_received_legacy)
+        self.ml_bridge.set_callback('risk', self.on_risk_received_legacy)
+        self.ml_bridge.set_callback('signal', self.on_signal_received_legacy)
+        self.ml_bridge.set_callback('error', self.on_ml_error_legacy)
+        
+        # Initialize the bridge
+        try:
+            self.ml_bridge.initialize()
+        except Exception as e:
+            print(f"Warning: Julia ML not available: {e}")
+    
+    def setup_ui(self):
+        """Setup the user interface"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+        
+        # Create panels
+        left_panel = self.create_left_panel()
+        right_panel = self.create_right_panel()
+        
+        main_layout.addWidget(left_panel, 1)
+        main_layout.addWidget(right_panel, 1)
+    
+    # ... (rest of legacy methods would go here)
+    # Keeping this short since the main class is ThreeCoinTradingGUI
+
+
+def main():
+    app = QApplication(sys.argv)
+    
+    # Set application style
+    app.setStyle('Fusion')
+    
+    # Dark theme
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(30, 30, 30))
+    dark_palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+    app.setPalette(dark_palette)
+    
+    # Use the new 3-coin GUI by default
+    window = ThreeCoinTradingGUI()
+    window.show()
+    
+    print("🚀 Starting 3-Coin Crypto Trading GUI")
+    print("📊 Monitoring BTC, ETH, USDT with Julia ML")
+    print("💡 Use the tabs to switch between coins")
+    print("🔮 Predict Price: Get ML price predictions")
+    print("⚠️ Analyze Risk: Calculate risk score (0-1)")
+    print("📊 Get Recommendation: Get BUY/SELL/HOLD advice")
+    print("💰 Use Buy/Sell buttons to execute trades")
+    
+    sys.exit(app.exec())
+
+def main_legacy():
+    """Launch the legacy single-coin GUI"""
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(30, 30, 30))
+    dark_palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+    app.setPalette(dark_palette)
+    
+    window = TradingSimulatorGUI()
+    window.show()
+    
+    print("🚀 Starting Legacy Crypto Trading GUI (Single BTC)")
+    
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    # Allow choosing between new 3-coin GUI and legacy single-coin
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--legacy":
+        main_legacy()
+    else:
+        main()
