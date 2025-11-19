@@ -1,6 +1,349 @@
-# start
+# Julia ML Script for Cryptocurrency Prediction
+# Enhanced algorithms for real CSV data processing
 
+using CSV, DataFrames, Statistics, LinearAlgebra
 
+# Enhanced ML Prediction Algorithm
+function advanced_crypto_predict(prices::Vector{Float64}, periods::Int=5)
+    """
+    Advanced cryptocurrency price prediction using multiple ML techniques:
+    1. Moving Average Convergence Divergence (MACD)
+    2. Relative Strength Index (RSI)
+    3. Bollinger Bands
+    4. Linear regression trend
+    """
+    
+    n = length(prices)
+    if n < 20
+        println("⚠️ Need at least 20 data points for advanced prediction")
+        return simple_trend_predict(prices, periods)
+    end
+    
+    # Calculate technical indicators
+    short_ema = exponential_ma(prices, 12)
+    long_ema = exponential_ma(prices, 26)
+    macd = short_ema[end] - long_ema[end]
+    
+    rsi = calculate_rsi(prices, 14)
+    bb_upper, bb_lower, bb_middle = bollinger_bands(prices, 20, 2.0)
+    
+    # Linear regression trend
+    x_vals = 1:n
+    trend_slope = calculate_trend_slope(collect(x_vals), prices)
+    
+    println("📊 Technical Analysis:")
+    println("   MACD: $(round(macd, digits=2))")
+    println("   RSI: $(round(rsi, digits=2))")
+    println("   Trend Slope: $(round(trend_slope, digits=4))")
+    println("   Price vs BB Middle: $(round((prices[end] - bb_middle) / bb_middle * 100, digits=2))%")
+    
+    # Generate predictions
+    predictions = Float64[]
+    last_price = prices[end]
+    
+    for i in 1:periods
+        # Weight factors based on technical indicators
+        macd_factor = tanh(macd / (last_price * 0.01))  # Normalize MACD
+        rsi_factor = (rsi - 50) / 50  # Convert RSI to -1 to 1
+        trend_factor = trend_slope * i
+        
+        # Bollinger band position influence
+        bb_position = (last_price - bb_middle) / (bb_upper - bb_middle)
+        bb_factor = -bb_position * 0.1  # Reversion tendency
+        
+        # Combine factors
+        total_factor = (macd_factor * 0.3 + rsi_factor * 0.2 + 
+                       trend_factor * 0.4 + bb_factor * 0.1)
+        
+        # Add controlled randomness
+        random_factor = (rand() - 0.5) * 0.1
+        
+        # Calculate next price
+        price_change = total_factor * last_price * (1 - i * 0.05)  # Diminishing effect
+        next_price = last_price + price_change + (random_factor * last_price)
+        
+        # Apply realistic bounds
+        next_price = max(next_price, last_price * 0.8)  # Max 20% drop
+        next_price = min(next_price, last_price * 1.3)  # Max 30% gain
+        
+        push!(predictions, next_price)
+        last_price = next_price
+    end
+    
+    return predictions
+end
 
+# Helper functions for technical analysis
+function exponential_ma(prices::Vector{Float64}, period::Int)
+    """Calculate Exponential Moving Average"""
+    if length(prices) < period
+        return [mean(prices)]
+    end
+    
+    alpha = 2 / (period + 1)
+    ema = [prices[1]]
+    
+    for i in 2:length(prices)
+        push!(ema, alpha * prices[i] + (1 - alpha) * ema[end])
+    end
+    
+    return ema
+end
 
+function calculate_rsi(prices::Vector{Float64}, period::Int=14)
+    """Calculate Relative Strength Index"""
+    if length(prices) < period + 1
+        return 50.0
+    end
+    
+    changes = diff(prices)
+    gains = max.(changes, 0)
+    losses = -min.(changes, 0)
+    
+    avg_gain = mean(gains[end-period+1:end])
+    avg_loss = mean(losses[end-period+1:end])
+    
+    if avg_loss == 0
+        return 100.0
+    end
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi
+end
 
+function bollinger_bands(prices::Vector{Float64}, period::Int=20, std_dev::Float64=2.0)
+    """Calculate Bollinger Bands"""
+    if length(prices) < period
+        middle = mean(prices)
+        return middle, middle, middle
+    end
+    
+    recent_prices = prices[end-period+1:end]
+    middle = mean(recent_prices)
+    std_val = std(recent_prices)
+    
+    upper = middle + (std_dev * std_val)
+    lower = middle - (std_dev * std_val)
+    
+    return upper, lower, middle
+end
+
+function calculate_trend_slope(x_vals::Vector{Int}, prices::Vector{Float64})
+    """Calculate linear regression trend slope"""
+    n = length(prices)
+    x_mean = mean(x_vals)
+    y_mean = mean(prices)
+    
+    numerator = sum((x_vals .- x_mean) .* (prices .- y_mean))
+    denominator = sum((x_vals .- x_mean) .^ 2)
+    
+    return denominator == 0 ? 0.0 : numerator / denominator
+end
+
+function simple_trend_predict(prices::Vector{Float64}, periods::Int)
+    """Fallback simple trend prediction"""
+    if length(prices) < 2
+        return fill(prices[end], periods)
+    end
+    
+    trend = prices[end] - prices[end-1]
+    predictions = Float64[]
+    last_price = prices[end]
+    
+    for i in 1:periods
+        next_price = last_price + trend * (0.7 + 0.6 * rand())
+        push!(predictions, max(next_price, last_price * 0.9))
+        last_price = next_price
+    end
+    
+    return predictions
+end
+
+# Risk analysis with volatility clustering
+function advanced_risk_analysis(prices::Vector{Float64})
+    """Enhanced risk analysis using GARCH-like volatility modeling"""
+    if length(prices) < 10
+        return 0.5
+    end
+    
+    returns = diff(log.(prices))  # Log returns for better properties
+    
+    # Calculate multiple risk measures
+    volatility = std(returns)
+    skewness = calculate_skewness(returns)
+    kurtosis = calculate_kurtosis(returns)
+    
+    # Value at Risk (5% quantile)
+    sorted_returns = sort(returns)
+    var_5 = sorted_returns[max(1, Int(floor(0.05 * length(returns))))]
+    
+    # Combine into overall risk score
+    vol_risk = min(volatility * 15, 0.4)  # Volatility component
+    tail_risk = min(abs(var_5) * 10, 0.3)  # Tail risk component
+    distribution_risk = min((abs(skewness) + abs(kurtosis - 3)) * 0.1, 0.3)
+    
+    total_risk = vol_risk + tail_risk + distribution_risk
+    
+    println("🎯 Risk Analysis Details:")
+    println("   Volatility: $(round(volatility * 100, digits=2))%")
+    println("   Skewness: $(round(skewness, digits=3))")
+    println("   VaR (5%): $(round(var_5 * 100, digits=2))%")
+    
+    return min(total_risk, 1.0)
+end
+
+function calculate_skewness(data::Vector{Float64})
+    """Calculate skewness of returns"""
+    n = length(data)
+    if n < 3
+        return 0.0
+    end
+    
+    μ = mean(data)
+    σ = std(data)
+    
+    if σ == 0
+        return 0.0
+    end
+    
+    return (n / ((n-1) * (n-2))) * sum(((data .- μ) ./ σ) .^ 3)
+end
+
+function calculate_kurtosis(data::Vector{Float64})
+    """Calculate kurtosis of returns"""
+    n = length(data)
+    if n < 4
+        return 3.0
+    end
+    
+    μ = mean(data)
+    σ = std(data)
+    
+    if σ == 0
+        return 3.0
+    end
+    
+    return (n * (n+1) / ((n-1) * (n-2) * (n-3))) * sum(((data .- μ) ./ σ) .^ 4) - 
+           (3 * (n-1)^2 / ((n-2) * (n-3)))
+end
+
+# Advanced trading signal with multiple timeframes
+function advanced_trading_signal(prices::Vector{Float64})
+    """Generate trading signals using multiple timeframe analysis"""
+    if length(prices) < 50
+        return "HOLD"
+    end
+    
+    # Short term (5-day), medium term (20-day), long term (50-day) analysis
+    short_ma = mean(prices[end-4:end])
+    medium_ma = mean(prices[end-19:end]) 
+    long_ma = mean(prices[end-49:end])
+    
+    current_price = prices[end]
+    
+    # Calculate momentum for different timeframes
+    short_momentum = (short_ma - medium_ma) / medium_ma
+    long_momentum = (medium_ma - long_ma) / long_ma
+    
+    # RSI for overbought/oversold
+    rsi = calculate_rsi(prices, 14)
+    
+    # Bollinger band position
+    bb_upper, bb_lower, bb_middle = bollinger_bands(prices, 20, 2.0)
+    bb_position = (current_price - bb_middle) / (bb_upper - bb_lower)
+    
+    println("📊 Signal Analysis:")
+    println("   Short Momentum: $(round(short_momentum * 100, digits=2))%")
+    println("   Long Momentum: $(round(long_momentum * 100, digits=2))%")
+    println("   RSI: $(round(rsi, digits=1))")
+    println("   BB Position: $(round(bb_position, digits=3))")
+    
+    # Decision logic
+    bullish_signals = 0
+    bearish_signals = 0
+    
+    # Momentum signals
+    if short_momentum > 0.02  # Strong short-term uptrend
+        bullish_signals += 2
+    elseif short_momentum < -0.02
+        bearish_signals += 2
+    end
+    
+    if long_momentum > 0.01  # Long-term uptrend
+        bullish_signals += 1
+    elseif long_momentum < -0.01
+        bearish_signals += 1
+    end
+    
+    # RSI signals
+    if rsi < 30  # Oversold
+        bullish_signals += 1
+    elseif rsi > 70  # Overbought
+        bearish_signals += 1
+    end
+    
+    # Bollinger band signals
+    if bb_position < -0.5  # Near lower band
+        bullish_signals += 1
+    elseif bb_position > 0.5  # Near upper band
+        bearish_signals += 1
+    end
+    
+    # Final decision
+    if bullish_signals >= bearish_signals + 2
+        return "BUY"
+    elseif bearish_signals >= bullish_signals + 2
+        return "SELL"
+    else
+        return "HOLD"
+    end
+end
+
+# Demo function
+function demo_enhanced_ml()
+    """Demo the enhanced ML functions"""
+    println("🚀 Enhanced Julia ML Demo")
+    println("=" ^ 50)
+    
+    # Generate sample price data
+    prices = Float64[]
+    base_price = 45000.0
+    
+    for i in 1:100
+        if i == 1
+            push!(prices, base_price)
+        else
+            change = randn() * 0.02  # 2% daily volatility
+            new_price = prices[end] * (1 + change)
+            push!(prices, max(new_price, base_price * 0.5))
+        end
+    end
+    
+    println("📈 Sample Data: $(length(prices)) price points")
+    println("💰 Current Price: \$$(round(prices[end], digits=2))")
+    
+    # Test enhanced prediction
+    predictions = advanced_crypto_predict(prices, 5)
+    println("\n🔮 Enhanced Predictions:")
+    for (i, pred) in enumerate(predictions)
+        change = (pred - prices[end]) / prices[end] * 100
+        println("  Day $i: \$$(round(pred, digits=2)) ($(round(change, digits=2))%)")
+    end
+    
+    # Test enhanced risk
+    risk = advanced_risk_analysis(prices)
+    println("\n⚠️ Risk Score: $(round(risk, digits=3))")
+    
+    # Test enhanced signal
+    signal = advanced_trading_signal(prices)
+    println("📊 Trading Signal: $signal")
+    
+    println("\n✅ Demo complete!")
+end
+
+# Run demo if script is executed directly
+if abspath(PROGRAM_FILE) == @__FILE__
+    demo_enhanced_ml()
+end
