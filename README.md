@@ -96,27 +96,35 @@ This project demonstrates **advanced language interoperability** by connecting:
 
 4. **Run the application**:
    ```bash
-   python crypto_gui_integration.py
+   python run_gui.py
    ```
 
-### With Your Own Data
+### Testing the System
 
-1. **Place your CSV files** in the project directory:
-   - `Bitcoin prices.csv`
-   - `Ethereum Prices.csv` 
-   - `USDT Prices.csv`
-
-2. **CSV Format Required**:
-   ```csv
-   timeOpen,close
-   2025-11-18T00:00:00.000Z,92948.87
-   2025-11-17T00:00:00.000Z,92093.87
-   ```
-
-3. **Run the integration**:
+1. **Run system validation**:
    ```bash
-   python real_data_integration.py
+   python run_tests.py
    ```
+
+2. **Test data integration**:
+   ```bash
+   python run_data_test.py
+   ```
+
+### Running from Source
+
+If you prefer to run from the source directories:
+
+```bash
+# Main GUI
+cd code && python crypto_gui_integration.py
+
+# Data integration test
+cd data && python real_data_integration.py
+
+# System tests  
+cd tests && python test_components.py
+```
 
 ## 📁 Project Structure
 
