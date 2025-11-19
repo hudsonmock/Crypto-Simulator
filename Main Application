@@ -60,9 +60,9 @@ class ThreeCoinTradingGUI(QMainWindow):
         
         # 🎯 REAL CSV DATA - Your actual cryptocurrency files
         your_csv_files = {
-            'BTC': 'Bitcoin prices.csv',
-            'ETH': 'Ethereum Prices.csv', 
-            'USDT': 'USDT Prices.csv'
+            'BTC': '../data/Bitcoin prices.csv',
+            'ETH': '../data/Ethereum Prices.csv', 
+            'USDT': '../data/USDT Prices.csv'
         }
         
         # Try to load your real CSV data first
