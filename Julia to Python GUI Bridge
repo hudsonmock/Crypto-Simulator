@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Julia ML Bridge for Crypto Trading Simulator
-Person E: Connecting Julia ML with Python GUI
+Advanced ML integration connecting Julia algorithms with Python GUI
 
 This module provides the interface between Julia ML predictive strategies 
 and the Python GUI trading interface.
@@ -57,14 +57,14 @@ except ImportError as e:
     GUI_AVAILABLE = False
     print(f"✗ PySide6 not available: {e}")
 
-# Yahoo Finance data compatibility
+# Real-time data processing capabilities
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
-    print("✓ Yahoo Finance integration available")
+    print("✓ Real-time data integration available")
 except ImportError:
     YFINANCE_AVAILABLE = False
-    print("ℹ️  Yahoo Finance not installed (Person D will handle data)")
+    print("ℹ️  Using CSV data integration")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -818,54 +818,54 @@ class JuliaPythonBridge:
         except Exception as e:
             print(f"Error handling error: {e}")
     
-    def request_prediction_from_yahoo_data(self, yahoo_data, periods: int = 5):
+    def request_prediction_from_data(self, data, periods: int = 5):
         """
-        Request price prediction from Yahoo Finance data (Person D's format)
+        Request price prediction from formatted data (DataFrame, dict, list)
         
         Args:
-            yahoo_data: Yahoo Finance data in any format (DataFrame, dict, list)
+            data: Price data in any format (DataFrame, dict, list)
             periods: Number of periods to predict
         """
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(data)
         if not price_data:
-            logger.error("Could not extract price data from Yahoo Finance format")
+            logger.error("Could not extract price data from provided format")
             if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
+                self.callbacks['error']("Invalid data format")
             return
         
         self.request_prediction(price_data, periods)
     
-    def request_risk_from_yahoo_data(self, yahoo_data):
-        """Request risk analysis from Yahoo Finance data"""
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
+    def request_risk_from_data(self, data):
+        """Request risk analysis from formatted data"""
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(data)
         if not price_data:
             logger.error("Could not extract price data for risk analysis")
             if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
+                self.callbacks['error']("Invalid data format")
             return
         
         self.request_risk_analysis(price_data)
     
-    def request_signal_from_yahoo_data(self, yahoo_data):
-        """Request trading signal from Yahoo Finance data"""
-        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(yahoo_data)
-        volume_data = YahooFinanceDataAdapter.extract_volume_from_yahoo_data(yahoo_data)
+    def request_signal_from_data(self, data):
+        """Request trading signal from formatted data"""
+        price_data = YahooFinanceDataAdapter.extract_prices_from_yahoo_data(data)
+        volume_data = YahooFinanceDataAdapter.extract_volume_from_yahoo_data(data)
         
         if not price_data:
             logger.error("Could not extract price data for trading signal")
             if 'error' in self.callbacks:
-                self.callbacks['error']("Invalid Yahoo Finance data format")
+                self.callbacks['error']("Invalid data format")
             return
         
         self.request_trading_signal(price_data, volume_data)
     
-    def process_crypto_update(self, symbol: str, yahoo_data, analysis_types: List[str] = None):
+    def process_crypto_update(self, symbol: str, data, analysis_types: List[str] = None):
         """
-        Process a crypto update from Person D's Yahoo Finance feed
+        Process a cryptocurrency data update with ML analysis
         
         Args:
             symbol: Crypto symbol (e.g., 'BTC-USD', 'ETH-USD')
-            yahoo_data: Yahoo Finance data
+            data: Price/volume data in any supported format
             analysis_types: List of analyses to run ['prediction', 'risk', 'signal']
         """
         if analysis_types is None:
@@ -878,13 +878,13 @@ class JuliaPythonBridge:
         
         # Run requested analyses
         if 'prediction' in analysis_types:
-            self.request_prediction_from_yahoo_data(yahoo_data)
+            self.request_prediction_from_data(data)
         
         if 'risk' in analysis_types:
-            self.request_risk_from_yahoo_data(yahoo_data)
+            self.request_risk_from_data(data)
         
         if 'signal' in analysis_types:
-            self.request_signal_from_yahoo_data(yahoo_data)
+            self.request_signal_from_data(data)
 
 # Test functions
 def test_bridge():
@@ -929,8 +929,8 @@ def test_bridge():
 # Yahoo Finance data adapter
 class YahooFinanceDataAdapter:
     """
-    Adapter for Yahoo Finance crypto data format
-    Works with Person D's data feed
+    Adapter for cryptocurrency data format conversion
+    Supports multiple data formats for ML processing
     """
     
     @staticmethod
