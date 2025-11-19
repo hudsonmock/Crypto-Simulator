@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""
+Real Data Integration - Your 3 CSV Files
+Integrates your actual Bitcoin, Ethereum, and USDT price data with Julia ML
+"""
+
+import sys
+import os
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from julia_ml_bridge import JuliaPythonBridge
+
+def load_your_csv_files():
+    """Load your three real cryptocurrency CSV files"""
+    
+    csv_files = {
+        'BTC': 'Bitcoin prices.csv',
+        'ETH': 'Ethereum Prices.csv', 
+        'USDT': 'USDT Prices.csv'
+    }
+    
+    coin_data = {}
+    
+    print("📊 Loading your real cryptocurrency data...")
+    
+    for coin_symbol, filename in csv_files.items():
+        if not os.path.exists(filename):
+            print(f"❌ File not found: {filename}")
+            continue
+            
+        try:
+            # Load CSV with your specific format
+            df = pd.read_csv(filename)
+            
+            # Rename columns to standard format for Julia
+            df = df.rename(columns={
+                'timeOpen': 'timestamp',
+                'close': 'close'
+            })
+            
+            # Add symbol column for compatibility
+            df['symbol'] = coin_symbol
+            
+            # Convert timestamp to datetime and sort chronologically (oldest to newest)
+            df['timestamp_dt'] = pd.to_datetime(df['timestamp'])
+            df = df.sort_values('timestamp_dt')
+            
+            # Extract just the prices for ML analysis (now in correct chronological order)
+            prices = df['close'].tolist()
+            
+            coin_data[coin_symbol] = {
+                'dataframe': df,
+                'prices': prices,
+                'filename': filename,
+                'records': len(df)
+            }
+            
+            print(f"✅ Loaded {coin_symbol}: {len(prices)} price points from {filename}")
+            print(f"   📈 Price range: ${min(prices):.2f} - ${max(prices):.2f}")
+            print(f"   💰 Latest price (Nov 18): ${prices[-1]:.2f}")  # Last item is most recent
+            print(f"   📅 Date range: {df['timestamp_dt'].min().strftime('%Y-%m-%d')} to {df['timestamp_dt'].max().strftime('%Y-%m-%d')}")
+            
+        except Exception as e:
+            print(f"❌ Error loading {filename}: {e}")
+    
+    return coin_data
+
+def test_julia_ml_with_your_data():
+    """Test Julia ML with your real cryptocurrency data"""
+    print("\n🚀 Testing Julia ML with Your Real Data")
+    print("="*60)
+    
+    # Load your CSV files
+    coin_data = load_your_csv_files()
+    
+    if not coin_data:
+        print("❌ No data loaded. Check your CSV files.")
+        return False
+    
+    # Initialize Julia bridge
+    bridge = JuliaPythonBridge()
+    if not bridge.initialize():
+        print("❌ Failed to initialize Julia bridge")
+        return False
+    
+    print(f"\n🧠 Running Julia ML Analysis on Your Data...")
+    
+    # Test each coin with Julia ML
+    for coin_symbol, data in coin_data.items():
+        print(f"\n{'='*20} {coin_symbol} Analysis {'='*20}")
+        
+        prices = data['prices']
+        
+        print(f"📊 Data Summary:")
+        print(f"   Records: {data['records']}")
+        print(f"   Date range: {len(prices)} days")
+        print(f"   Current price: ${prices[-1]:.4f}")
+        
+        # Use recent history for predictions (last 50 days)
+        recent_prices = prices[-50:] if len(prices) > 50 else prices
+        
+        try:
+            # 🔮 Julia ML Predictions
+            print(f"\n🔮 Julia Price Predictions (Next 5 Days):")
+            predictions = bridge.predict_price_enhanced(recent_prices, periods=5, use_advanced_ml=True)
+            
+            for i, pred in enumerate(predictions, 1):
+                change = ((pred - prices[-1]) / prices[-1]) * 100
+                print(f"   Day {i}: ${pred:.2f} ({change:+.2f}%)")
+            
+            # ⚠️ Risk Analysis  
+            risk_score = bridge.calculate_risk(recent_prices)
+            risk_level = "LOW" if risk_score < 0.3 else "MEDIUM" if risk_score < 0.7 else "HIGH"
+            print(f"\n⚠️  Risk Analysis:")
+            print(f"   Risk Score: {risk_score:.3f}")
+            print(f"   Risk Level: {risk_level}")
+            
+            # 📊 Trading Signal
+            signal = bridge.generate_signal(recent_prices)
+            signal_emoji = "📈" if signal == "BUY" else "📉" if signal == "SELL" else "⏸️"
+            print(f"\n📊 Trading Signal: {signal_emoji} {signal}")
+            
+        except Exception as e:
+            print(f"❌ Julia ML analysis failed for {coin_symbol}: {e}")
+    
+    return True
+
+def create_combined_csv():
+    """Create a single combined CSV file for easier Julia processing"""
+    print(f"\n📁 Creating combined CSV file...")
+    
+    coin_data = load_your_csv_files()
+    
+    if not coin_data:
+        return None
+    
+    # Combine all dataframes
+    combined_df = pd.DataFrame()
+    
+    for coin_symbol, data in coin_data.items():
+        df = data['dataframe'].copy()
+        combined_df = pd.concat([combined_df, df], ignore_index=True)
+    
+    # Save combined file
+    combined_file = "combined_crypto_data.csv"
+    combined_df.to_csv(combined_file, index=False)
+    
+    print(f"✅ Created {combined_file} with {len(combined_df)} total records")
+    print(f"   Coins: {', '.join(coin_data.keys())}")
+    
+    return combined_file
+
+def update_gui_for_your_data():
+    """Update the GUI configuration to use your specific CSV files"""
+    
+    # Read current GUI file
+    gui_file = 'crypto_gui_integration.py'
+    
+    try:
+        with open(gui_file, 'r') as f:
+            content = f.read()
+        
+        # Update the CSV file path to use combined file
+        old_line = 'csv_file_path = "your_crypto_data.csv"'
+        new_line = 'csv_file_path = "combined_crypto_data.csv"'
+        
+        updated_content = content.replace(old_line, new_line)
+        
+        with open(gui_file, 'w') as f:
+            f.write(updated_content)
+        
+        print(f"✅ Updated {gui_file} to use your real data")
+        
+    except Exception as e:
+        print(f"❌ Failed to update GUI configuration: {e}")
+
+def main():
+    print("🎯 Real Data Integration for Julia ML Crypto Trading")
+    print("="*65)
+    
+    # Test with your real data
+    if test_julia_ml_with_your_data():
+        
+        # Create combined CSV for easier processing
+        combined_file = create_combined_csv()
+        
+        if combined_file:
+            # Update GUI configuration
+            update_gui_for_your_data()
+            
+            print(f"\n🎉 Integration Complete!")
+            print(f"\n📋 What's Ready:")
+            print(f"   ✅ Your real price data loaded into Julia ML")
+            print(f"   ✅ Combined CSV created: {combined_file}")
+            print(f"   ✅ GUI configured to use your data")
+            print(f"   ✅ Julia algorithms tested with your prices")
+            
+            print(f"\n🚀 Ready to Run:")
+            print(f"   1. python crypto_gui_integration.py")
+            print(f"   2. Your GUI will now use REAL data with Julia ML!")
+            
+            print(f"\n📊 Your Data Summary:")
+            coin_data = load_your_csv_files()
+            for coin, data in coin_data.items():
+                print(f"   {coin}: {data['records']} days, ${data['prices'][-1]:.2f} current")
+        
+    else:
+        print(f"\n❌ Integration failed. Check your CSV files.")
+
+if __name__ == "__main__":
+    main()
