@@ -58,8 +58,20 @@ class ThreeCoinTradingGUI(QMainWindow):
         self.setup_ui()
         self.setup_style()
         
-        # Generate sample data for all coins
-        self.generate_coin_data()
+        # 🎯 REAL CSV DATA - Your actual cryptocurrency files
+        your_csv_files = {
+            'BTC': 'Bitcoin prices.csv',
+            'ETH': 'Ethereum Prices.csv', 
+            'USDT': 'USDT Prices.csv'
+        }
+        
+        # Try to load your real CSV data first
+        if self.load_your_real_data(your_csv_files):
+            print(f"✅ Using your real cryptocurrency data")
+            self.julia_mode = True  # Use Julia for all predictions
+        else:
+            print("⚠️ Real CSV files not found, using simulated data")
+            self.generate_coin_data()
         
         # Initialize portfolio display
         self.update_portfolio_display()
@@ -750,9 +762,17 @@ class ThreeCoinTradingGUI(QMainWindow):
     
     # ML Request methods for specific coins
     def request_coin_prediction(self, coin_id):
-        """Request price prediction for specific coin"""
+        """Request price prediction for specific coin using real data"""
         coin_info = self.coins[coin_id]
-        if len(coin_info['price_history']) < 5:
+        
+        # Use full historical data if available (for better ML predictions)
+        if 'full_price_history' in coin_info and len(coin_info['full_price_history']) >= 10:
+            price_data = coin_info['full_price_history'][-100:]  # Use last 100 points for analysis
+            self.log_coin_activity(coin_id, f"🔮 Using {len(price_data)} real historical prices for prediction")
+        elif len(coin_info['price_history']) >= 5:
+            price_data = coin_info['price_history']
+            self.log_coin_activity(coin_id, f"🔮 Using {len(price_data)} recent prices for prediction")
+        else:
             self.log_coin_activity(coin_id, "❌ Not enough data for prediction")
             return
         
@@ -760,13 +780,13 @@ class ThreeCoinTradingGUI(QMainWindow):
         if predict_btn:
             predict_btn.setEnabled(False)
         
-        self.log_coin_activity(coin_id, "🔮 Requesting ML prediction...")
+        self.log_coin_activity(coin_id, "🔮 Requesting Julia ML prediction with real data...")
         
         # Store which coin is being analyzed
         self.current_analysis_coin = coin_id
         
-        # Use bridge
-        self.ml_bridge.request_prediction(coin_info['price_history'], 5)
+        # Use enhanced Julia prediction with real data
+        self.ml_bridge.request_prediction(price_data, 5)
     
     def request_coin_risk(self, coin_id):
         """Request risk analysis for specific coin"""
@@ -971,8 +991,123 @@ class ThreeCoinTradingGUI(QMainWindow):
             self.log_coin_activity(coin_id, f"❌ ML Error: {error_msg}")
         except Exception as e:
             print(f"Error handling ML error: {e}")
+    
+    def load_csv_data(self, csv_filepath: str):
+        """Load real CSV data for Julia ML processing"""
+        try:
+            # Load data into Julia ML bridge
+            if self.ml_bridge.load_csv_data(csv_filepath):
+                self.log_global_activity(f"📁 Loaded CSV data from {csv_filepath}")
+                
+                # Extract data for each coin if available
+                for coin_id in self.coins.keys():
+                    prices = self.ml_bridge.get_csv_prices(coin_id.upper(), "close")
+                    if prices:
+                        # Use last 20 prices as current history
+                        self.coins[coin_id]['price_history'] = prices[-20:]
+                        self.log_coin_activity(coin_id, f"✅ Loaded {len(prices)} historical prices from CSV")
+                        
+                        # Update display with real data
+                        self.update_coin_display(coin_id)
+                    else:
+                        self.log_coin_activity(coin_id, f"⚠️ No data found for {coin_id} in CSV")
+                
+                return True
+            else:
+                self.log_global_activity("❌ Failed to load CSV data")
+                return False
+                
+        except Exception as e:
+            self.log_global_activity(f"❌ CSV loading error: {e}")
+            return False
+    
+    def load_csv_data_if_exists(self, csv_filepath: str) -> bool:
+        """Try to load CSV data, return False if file doesn't exist"""
+        import os
+        
+        if not os.path.exists(csv_filepath):
+            print(f"📁 CSV file not found: {csv_filepath}")
+            return False
+        
+        try:
+            return self.load_csv_data(csv_filepath)
+        except Exception as e:
+            print(f"❌ Error loading CSV: {e}")
+            return False
+    
+    def switch_to_julia_predictions(self):
+        """Switch from Python simulation to Julia-controlled predictions"""
+        self.log_global_activity("🔄 Switching to Julia-controlled predictions")
+        
+        # Stop Python price simulation
+        if hasattr(self, 'update_timer'):
+            self.update_timer.stop()
+        
+        # Use Julia for all future predictions
+        self.julia_mode = True
+        self.log_global_activity("✅ Now using Julia ML for all predictions")
+    
+    def load_your_real_data(self, csv_files: dict) -> bool:
+        """Load your specific CSV files with real cryptocurrency data"""
+        import os
+        import pandas as pd
+        
+        try:
+            # Check if all files exist
+            missing_files = [f for f in csv_files.values() if not os.path.exists(f)]
+            if missing_files:
+                print(f"📁 Missing CSV files: {', '.join(missing_files)}")
+                return False
+            
+            print("📊 Loading your real cryptocurrency data...")
+            
+            # Load each CSV file and extract prices
+            for coin_id, filepath in csv_files.items():
+                try:
+                    # Load CSV with your specific format
+                    df = pd.read_csv(filepath)
+                    
+                    # Convert timestamp to datetime for proper sorting
+                    df['timestamp_dt'] = pd.to_datetime(df['timeOpen'])
+                    
+                    # Sort by timestamp (oldest to newest) for proper chronological order
+                    df = df.sort_values('timestamp_dt')
+                    
+                    # Extract closing prices in chronological order
+                    prices = df['close'].tolist()
+                    
+                    # Use the most recent data for current history (last 20 points)
+                    self.coins[coin_id]['price_history'] = prices[-20:]  # Last 20 points for display
+                    
+                    # Store full price history for ML analysis
+                    self.coins[coin_id]['full_price_history'] = prices
+                    
+                    # Update current price display
+                    self.update_coin_display(coin_id)
+                    
+                    print(f"✅ {coin_id}: Loaded {len(prices)} price points")
+                    print(f"   💰 Current price (latest): ${prices[-1]:.2f}")  # Last item is most recent
+                    print(f"   📅 Date range: {df['timestamp_dt'].min().strftime('%Y-%m-%d')} to {df['timestamp_dt'].max().strftime('%Y-%m-%d')}")
+                    
+                    # Log to coin-specific activity
+                    self.log_coin_activity(coin_id, f"📊 Loaded {len(prices)} real price points from {filepath}")
+                    self.log_coin_activity(coin_id, f"💰 Current price: ${prices[-1]:.2f}")
+                    
+                except Exception as e:
+                    print(f"❌ Error loading {coin_id} from {filepath}: {e}")
+                    return False
+            
+            # Log global success
+            self.log_global_activity("✅ Real cryptocurrency data loaded successfully")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error loading real data: {e}")
+            return False
 
-
+    # ...existing code...
+    
 # Legacy single-coin class for backward compatibility
 class TradingSimulatorGUI(QMainWindow):
     """
