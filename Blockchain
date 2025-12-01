@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""
+Crypto Portfolio Blockchain
+Simple blockchain implementation for storing crypto portfolio transactions and holdings
+
+This module implements a basic blockchain to store:
+- Trading transactions (buy/sell)
+- Portfolio holdings state
+- Transaction timestamps and validation
+"""
+
+import json
+import hashlib
+import time
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+import os
+
+class Block:
+    """A single block in the blockchain containing portfolio transaction data"""
+    
+    def __init__(self, index: int, transactions: List[Dict], timestamp: float = None, previous_hash: str = ""):
+        self.index = index
+        self.timestamp = timestamp or time.time()
+        self.transactions = transactions
+        self.previous_hash = previous_hash
+        self.nonce = 0
+        self.hash = self.calculate_hash()
+    
+    def calculate_hash(self) -> str:
+        """Calculate the hash of the block"""
+        block_string = f"{self.index}{self.timestamp}{json.dumps(self.transactions, sort_keys=True)}{self.previous_hash}{self.nonce}"
+        return hashlib.sha256(block_string.encode()).hexdigest()
+    
+    def mine_block(self, difficulty: int = 2):
+        """Simple proof of work mining"""
+        target = "0" * difficulty
+        while self.hash[:difficulty] != target:
+            self.nonce += 1
+            self.hash = self.calculate_hash()
+        
+        print(f"⛏️  Block mined: {self.hash[:10]}...")
+    
+    def to_dict(self) -> Dict:
+        """Convert block to dictionary for storage"""
+        return {
+            'index': self.index,
+            'timestamp': self.timestamp,
+            'transactions': self.transactions,
+            'previous_hash': self.previous_hash,
+            'nonce': self.nonce,
+            'hash': self.hash
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict):
+        """Create block from dictionary"""
+        block = cls(
+            data['index'],
+            data['transactions'],
+            data['timestamp'],
+            data['previous_hash']
+        )
+        block.nonce = data['nonce']
+        block.hash = data['hash']
+        return block
+
+class CryptoPortfolioBlockchain:
+    """
+    Blockchain for storing cryptocurrency portfolio transactions and holdings
+    """
+    
+    def __init__(self, blockchain_file: str = "portfolio_blockchain.json"):
+        self.chain: List[Block] = []
+        self.pending_transactions: List[Dict] = []
+        self.blockchain_file = blockchain_file
+        self.mining_reward = 0.0001  # Small mining reward in USDT
+        
+        # Load existing blockchain or create genesis block
+        self.load_blockchain()
+        
+        print(f"🔗 Portfolio blockchain initialized with {len(self.chain)} blocks")
+    
+    def create_genesis_block(self) -> Block:
+        """Create the first block in the blockchain"""
+        genesis_transaction = {
+            'type': 'genesis',
+            'description': 'Portfolio blockchain genesis block',
+            'portfolio_state': {
+                'BTC': 0.0,
+                'ETH': 0.0,
+                'USDT': 1000.0,  # Starting balance
+                'cash': 0.0
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return Block(0, [genesis_transaction], time.time(), "0")
+    
+    def get_latest_block(self) -> Block:
+        """Get the most recent block in the chain"""
+        return self.chain[-1] if self.chain else self.create_genesis_block()
+    
+    def add_transaction(self, transaction_type: str, coin: str, amount: float, 
+                       price: float, portfolio_state: Dict[str, float]):
+        """
+        Add a trading transaction to pending transactions
+        
+        Args:
+            transaction_type: 'buy' or 'sell'
+            coin: 'BTC', 'ETH', 'USDT'
+            amount: Amount of coin traded
+            price: Price per coin at time of trade
+            portfolio_state: Current portfolio holdings after transaction
+        """
+        transaction = {
+            'type': transaction_type,
+            'coin': coin,
+            'amount': amount,
+            'price': price,
+            'total_value': amount * price,
+            'portfolio_state': portfolio_state.copy(),
+            'timestamp': datetime.now().isoformat(),
+            'transaction_id': hashlib.sha256(f"{time.time()}{coin}{amount}".encode()).hexdigest()[:16]
+        }
+        
+        self.pending_transactions.append(transaction)
+        print(f"📝 Added {transaction_type} transaction: {amount:.6f} {coin} @ ${price:.2f}")
+    
+    def mine_pending_transactions(self) -> bool:
+        """
+        Mine a new block with pending transactions
+        """
+        if not self.pending_transactions:
+            print("⚠️ No pending transactions to mine")
+            return False
+        
+        # Create new block
+        block = Block(
+            len(self.chain),
+            self.pending_transactions.copy(),
+            time.time(),
+            self.get_latest_block().hash
+        )
+        
+        # Mine the block
+        block.mine_block(difficulty=2)
+        
+        # Add to chain
+        self.chain.append(block)
+        
+        # Clear pending transactions
+        self.pending_transactions = []
+        
+        # Save blockchain
+        self.save_blockchain()
+        
+        print(f"✅ Block #{block.index} mined and added to blockchain")
+        return True
+    
+    def get_portfolio_balance(self) -> Dict[str, float]:
+        """
+        Calculate current portfolio balance from blockchain
+        """
+        if not self.chain:
+            return {'BTC': 0.0, 'ETH': 0.0, 'USDT': 1000.0, 'cash': 0.0}
+        
+        # Get the latest portfolio state from the most recent block
+        latest_block = self.get_latest_block()
+        if latest_block.transactions:
+            last_transaction = latest_block.transactions[-1]
+            if 'portfolio_state' in last_transaction:
+                return last_transaction['portfolio_state']
+        
+        # Fallback to genesis state
+        return {'BTC': 0.0, 'ETH': 0.0, 'USDT': 1000.0, 'cash': 0.0}
+    
+    def get_transaction_history(self) -> List[Dict]:
+        """Get all transactions from the blockchain"""
+        history = []
+        for block in self.chain:
+            for transaction in block.transactions:
+                transaction['block_index'] = block.index
+                transaction['block_hash'] = block.hash[:10] + "..."
+                history.append(transaction)
+        return history
+    
+    def validate_chain(self) -> bool:
+        """Validate the blockchain integrity"""
+        for i in range(1, len(self.chain)):
+            current_block = self.chain[i]
+            previous_block = self.chain[i - 1]
+            
+            # Check if current block hash is valid
+            if current_block.hash != current_block.calculate_hash():
+                print(f"❌ Block {i} has invalid hash")
+                return False
+            
+            # Check if current block points to previous block
+            if current_block.previous_hash != previous_block.hash:
+                print(f"❌ Block {i} has invalid previous hash")
+                return False
+        
+        print("✅ Blockchain validation passed")
+        return True
+    
+    def save_blockchain(self):
+        """Save blockchain to file"""
+        try:
+            blockchain_data = {
+                'chain': [block.to_dict() for block in self.chain],
+                'pending_transactions': self.pending_transactions,
+                'last_saved': datetime.now().isoformat()
+            }
+            
+            with open(self.blockchain_file, 'w') as f:
+                json.dump(blockchain_data, f, indent=2)
+            
+            print(f"💾 Blockchain saved to {self.blockchain_file}")
+            
+        except Exception as e:
+            print(f"❌ Failed to save blockchain: {e}")
+    
+    def load_blockchain(self):
+        """Load blockchain from file"""
+        try:
+            if os.path.exists(self.blockchain_file):
+                with open(self.blockchain_file, 'r') as f:
+                    data = json.load(f)
+                
+                # Load chain
+                self.chain = [Block.from_dict(block_data) for block_data in data.get('chain', [])]
+                
+                # Load pending transactions
+                self.pending_transactions = data.get('pending_transactions', [])
+                
+                print(f"📖 Blockchain loaded from {self.blockchain_file}")
+                print(f"🔗 {len(self.chain)} blocks loaded")
+                
+                # Validate loaded chain
+                self.validate_chain()
+                
+            else:
+                # Create genesis block
+                print("🆕 Creating new blockchain...")
+                genesis = self.create_genesis_block()
+                self.chain.append(genesis)
+                self.save_blockchain()
+                
+        except Exception as e:
+            print(f"❌ Failed to load blockchain: {e}")
+            print("🆕 Creating new blockchain...")
+            genesis = self.create_genesis_block()
+            self.chain.append(genesis)
+    
+    def get_blockchain_summary(self) -> Dict:
+        """Get summary statistics about the blockchain"""
+        total_transactions = sum(len(block.transactions) for block in self.chain)
+        
+        return {
+            'total_blocks': len(self.chain),
+            'total_transactions': total_transactions,
+            'pending_transactions': len(self.pending_transactions),
+            'chain_valid': self.validate_chain(),
+            'latest_block_hash': self.get_latest_block().hash[:16] + "..." if self.chain else None,
+            'blockchain_file': self.blockchain_file
+        }
+
+def test_blockchain():
+    """Test the portfolio blockchain functionality"""
+    print("🧪 Testing Portfolio Blockchain...")
+    
+    # Create blockchain
+    blockchain = CryptoPortfolioBlockchain("test_blockchain.json")
+    
+    # Add some test transactions
+    portfolio_state = {'BTC': 0.1, 'ETH': 2.0, 'USDT': 500.0, 'cash': 0.0}
+    blockchain.add_transaction('buy', 'BTC', 0.1, 50000.0, portfolio_state)
+    
+    portfolio_state = {'BTC': 0.1, 'ETH': 2.0, 'USDT': 200.0, 'cash': 0.0}
+    blockchain.add_transaction('buy', 'ETH', 2.0, 3000.0, portfolio_state)
+    
+    # Mine transactions
+    blockchain.mine_pending_transactions()
+    
+    # Show summary
+    summary = blockchain.get_blockchain_summary()
+    print("📊 Blockchain Summary:")
+    for key, value in summary.items():
+        print(f"  {key}: {value}")
+    
+    # Show transaction history
+    print("\n📋 Transaction History:")
+    for tx in blockchain.get_transaction_history():
+        print(f"  {tx['type']} {tx.get('amount', 'N/A')} {tx.get('coin', 'N/A')} @ {tx.get('price', 'N/A')}")
+
+if __name__ == "__main__":
+    test_blockchain()
