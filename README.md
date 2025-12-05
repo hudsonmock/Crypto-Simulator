@@ -7,7 +7,7 @@ A sophisticated cryptocurrency trading simulator that integrates **Julia machine
 ![PySide6](https://img.shields.io/badge/GUI-PySide6-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## 🎯 Project Overview
+## Project Overview
 
 This project demonstrates **advanced language interoperability** by connecting:
 - **Julia ML Engine**: Advanced statistical analysis and prediction algorithms
@@ -15,14 +15,14 @@ This project demonstrates **advanced language interoperability** by connecting:
 - **Real Market Data**: Integration with historical cryptocurrency prices
 
 ### Key Features
-- ✅ **3-Coin Support**: Bitcoin (BTC), Ethereum (ETH), Tether (USDT)
-- ✅ **Julia ML Predictions**: Advanced technical analysis algorithms
-- ✅ **Real-time Risk Analysis**: Volatility-based risk scoring
-- ✅ **Trading Signals**: BUY/SELL/HOLD recommendations
-- ✅ **Portfolio Management**: Virtual trading with P&L tracking
-- ✅ **Historical Data**: 13+ months of real cryptocurrency prices
+-  **3-Coin Support**: Bitcoin (BTC), Ethereum (ETH), Tether (USDT)
+-  **Julia ML Predictions**: Advanced technical analysis algorithms
+-  **Real-time Risk Analysis**: Volatility-based risk scoring
+-  **Trading Signals**: BUY/SELL/HOLD recommendations
+-  **Portfolio Management**: Virtual trading with P&L tracking
+-  **Historical Data**: 13+ months of real cryptocurrency prices
 
-## 🚀 Demo
+## Demo
 
 ![Crypto Trading GUI](screenshots/main_gui.png)
 
@@ -32,7 +32,7 @@ This project demonstrates **advanced language interoperability** by connecting:
 - **Trading Simulation**: Execute virtual trades with portfolio tracking
 - **Multi-coin Tabs**: Independent analysis for each cryptocurrency
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -49,7 +49,7 @@ This project demonstrates **advanced language interoperability** by connecting:
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-## 📊 Machine Learning Algorithms
+## Machine Learning Algorithms
 
 ### Julia ML Engine (`enhanced_julia_ml.jl`)
 
@@ -126,35 +126,35 @@ cd data && python real_data_integration.py
 cd tests && python test_components.py
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 crypto-trading-julia-ml/
-├── 🎯 CORE APPLICATION
+├──  CORE APPLICATION
 │   ├── crypto_gui_integration.py    # Main 3-coin GUI application
 │   ├── julia_ml_bridge.py          # Python ↔ Julia ML bridge
 │   └── enhanced_julia_ml.jl         # Advanced Julia ML algorithms
 │
-├── 📊 DATA INTEGRATION
+├──  DATA INTEGRATION
 │   ├── real_data_integration.py     # CSV data processing
 │   ├── Bitcoin prices.csv          # BTC historical data
 │   ├── Ethereum Prices.csv         # ETH historical data
 │   └── USDT Prices.csv             # USDT historical data
 │
-├── 🧪 TESTING & VALIDATION
+├──  TESTING & VALIDATION
 │   ├── test_components.py           # System validation
 │   └── csv_julia_integration.py     # Integration testing
 │
-├── 📚 DOCUMENTATION
+├──  DOCUMENTATION
 │   ├── README.md                   # This file
 │   ├── Project_Analysis_Report.md   # Technical analysis
 │   └── requirements.txt            # Python dependencies
 │
-└── 📸 ASSETS
+└──  ASSETS
     └── screenshots/                # GUI screenshots for demo
 ```
 
-## 🔧 Key Components
+## Key Components
 
 ### 1. Python GUI (`crypto_gui_integration.py`)
 - **PySide6-based interface** with tabbed multi-coin layout
@@ -180,7 +180,7 @@ crypto-trading-julia-ml/
 - **Data validation** and format standardization
 - **Historical analysis** with 13+ months of real market data
 
-## 📈 Technical Analysis Features
+## Technical Analysis Features
 
 ### Price Predictions
 - **5-period forecasting** using trend analysis and momentum
@@ -200,7 +200,7 @@ crypto-trading-julia-ml/
 - **Support/resistance levels** via Bollinger Band positioning
 - **Signal confidence** based on indicator convergence
 
-## 🎓 Educational Value
+## Educational Value
 
 This project demonstrates:
 - **Language Interoperability**: Seamless Python-Julia integration
@@ -209,13 +209,13 @@ This project demonstrates:
 - **Data Processing**: Time series analysis and CSV handling
 - **Software Architecture**: Modular design with clear separation of concerns
 
-## 🤝 Contributing
+## Contributing
 
 This project was developed as part of a collaborative team assignment with specialized roles:
 - **Person E (This Role)**: Julia ML ↔ Python GUI Integration
 - **Person A-D**: Blockchain, DEX, Smart Contracts, Data Integration
 
-## 📊 Performance
+## Performance
 
 **Data Processing**:
 - Loads 398+ days of historical data in <2 seconds
@@ -227,11 +227,11 @@ This project was developed as part of a collaborative team assignment with speci
 - With historical data: ~75MB RAM
 - Julia engine: ~100MB RAM (when active)
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Historical cryptocurrency data from market APIs
 - Julia community for excellent mathematical libraries
